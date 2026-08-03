@@ -11,7 +11,7 @@
 
 ## ✨ 特性
 
-- 🚀 **开箱即用**：一条命令从本机微信提取引擎，无需下载模型
+- 🚀 **开箱即用**：Windows + Linux 双平台引擎已随仓库分发，clone 即用，无需提取/下载
 - 🔒 **完全离线**：图片不出本机，隐私安全
 - 🇨🇳 **顶级中文识别**：实测营业执照类文字置信度 0.99+
 - ⚡ **速度快**：单张识别 0.4~0.6s
@@ -72,10 +72,10 @@ uv pip install --python .venv/Scripts/python.exe "mcp[cli]==1.9.*"
 
 ```
 ✓ MCP 初始化成功
-✓ 工具列表: ['ocr_image', 'ocr_batch']
+✓ 工具列表: ['ocr_image', 'ocr_document']
 ✓ ocr_image 调用成功
-  errcode=0 行数=4 尺寸=900x300
-    [0.999] 许昌市东城区嘉言懿行文化工作室
+  errcode=0 行数=14
+    [0.969] 企业名称: 许昌市建安区嘉言懿行电子..
     ...
 ```
 
@@ -178,11 +178,8 @@ mcp_servers:
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `ocr_image` | `image_path: str` | 单张图片/截图/扫描件识别，返回每行文字+坐标框+置信度+纯文本 |
-| `ocr_batch` | `image_paths: list` | 批量识别（≤20 张） |
-| `ocr_pdf` | `pdf_path, max_pages, dpi` | PDF 识别：文本型自动抽取，扫描型自动渲染+OCR |
-| `ocr_video` | `video_path, interval_sec, max_frames` | 视频画面文字识别（ffmpeg 抽帧+OCR，字幕/标题/弹幕） |
-| `extract_pdf_text` | `pdf_path, max_pages` | 文本型 PDF 快速提取文字层（不 OCR） |
+| `ocr_image` | `image_paths: list` | 图片/截图/扫描件识别（1~20 张自动批量），返回每行文字+坐标框+置信度+纯文本 |
+| `ocr_document` | `document_path, max_pages, dpi, interval_sec, max_frames` | PDF / 视频识别：自动判断类型（PDF 文本层直抽或渲染 OCR；视频 ffmpeg 抽帧 OCR） |
 
 > 每个工具的 description 都内置了「何时使用」触发词（图片扫描、截图文字提取、
 > 营业执照/发票识别、PDF 扫描件、视频字幕提取等），任何 MCP 客户端
@@ -192,22 +189,23 @@ mcp_servers:
 
 | 需求 | 用哪个工具 |
 |---|---|
-| 已有图片文件/截图/视频截图 → 读字 | `ocr_image` / `ocr_batch` |
+| 已有图片文件/截图/视频截图 → 读字 | `ocr_image` |
+| 已有 PDF（扫描件或电子版）→ 读字 | `ocr_document`（自动判断文本型/扫描型） |
+| 已有视频文件 → 提取字幕/画面文字 | `ocr_document`（ffmpeg 自动抽帧） |
 | 截屏、网页截图、视频截图动作本身 | 专门的截图工具（如 media-kit） |
-| 已有视频文件 → 提取字幕/画面文字 | `ocr_video`（自动抽帧，无需先截图） |
-| 已有 PDF（扫描件或电子版）→ 读字 | `ocr_pdf`（自动判断类型） |
-| 已有文本型 PDF → 快速复制文字 | `extract_pdf_text` |
 | 下载视频/网页内容 | 专门的下载工具（如 media-kit） |
 
 ## 🗺 项目结构
 
 ```
 mediaocr/
-├── server.py            # MCP server（FastMCP，stdio）
-├── extract_engine.py    # 从微信提取 OCR 引擎（核心脚本）
+├── server.py            # MCP server（FastMCP，stdio / --http）
+├── extract_engine.py    # 从微信提取 OCR 引擎（可选，引擎已随仓库分发）
 ├── test_client.py       # MCP 协议测试客户端
-├── engine/              # ⚠️ 运行时生成，不入库（~55MB）
-└── wcocr.pyd            # ⚠️ 调用封装，不入库（见「获取 wcocr.pyd」）
+├── wsl_test.py          # WSL/Linux 全链路测试（协议层 + 实际 OCR）
+├── engine/              # ✅ 微信 OCR 引擎（已入库，Win+Linux 双平台，~110MB）
+├── wcocr.pyd            # Windows 调用封装（Py 3.11 ABI，已入库）
+└── wcocr.so             # Linux 调用封装（Py 3.11 ABI，已入库）
 ```
 
 ## ⚠️ 已知限制

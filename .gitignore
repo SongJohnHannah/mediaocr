@@ -11,6 +11,9 @@ __pycache__/
 # ---- 微信 OCR 引擎运行产生的调试文件 ----
 debug.log
 
+# ---- 测试用临时图片（自行放置 test_img.png 后运行 test_client.py）----
+test_img.png
+
 # ---- 其他 ----
 .DS_Store
 Thumbs.db
