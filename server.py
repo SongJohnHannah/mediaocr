@@ -392,7 +392,7 @@ def main():
         print(
             "ERROR: 找不到微信 OCR 引擎。\n"
             "  请先运行:  python extract_engine.py\n"
-            "  （脚本会从本机已安装的微信中提取 OCR 引擎到 engine/ 目录）\n"
+            "  （脚本会自动检索本机微信；找不到时自动下载备用引擎）\n"
             "  或确认: 1) 项目 engine/ 目录完整；2) 本机已安装微信。",
             file=sys.stderr,
         )

@@ -148,13 +148,12 @@ def download_fallback(output: Path) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="从微信提取 OCR 引擎（或下载备用引擎）")
+    parser = argparse.ArgumentParser(
+        description="获取 OCR 引擎（自动检索：先找本地微信，找不到则自动下载备用引擎）")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "engine",
                         help="输出目录（默认: 脚本同级 engine/）")
-    parser.add_argument("--download", action="store_true",
-                        help="本地找不到微信时自动下载备用引擎（GitHub Release 33MB）")
     parser.add_argument("--force-download", action="store_true",
-                        help="忽略本地微信，强制下载备用引擎")
+                        help="跳过本地检索，强制下载备用引擎")
     args = parser.parse_args()
 
     # 强制下载模式
@@ -163,21 +162,16 @@ def main():
         print("\n✓ 备用引擎就绪。下一步见 README（仍需 wcocr.pyd 调用封装）。")
         return
 
-    # 1) 找微信
+    # 1) 自动检索：先找本地微信
     roots = find_wechat_roots()
     extracted = find_ocr_plugin()
 
     if (not roots and not extracted) or extracted is None:
-        if args.download:
-            print("⚠ 未找到本地微信/OCR 插件，改用备用引擎下载…", file=sys.stderr)
-            download_fallback(args.output)
-            print("\n✓ 备用引擎就绪。下一步见 README（仍需 wcocr.pyd 调用封装）。")
-            return
-        print("错误: 未找到已安装的微信。", file=sys.stderr)
-        print("  方案 A: 安装微信（3.x 或 4.x）后重跑本脚本。", file=sys.stderr)
-        print("  方案 B: 加 --download 参数，自动下载备用引擎（GitHub Release 33MB）。", file=sys.stderr)
-        print("  方案 C: 加 --force-download 参数，强制下载（忽略本地微信）。", file=sys.stderr)
-        sys.exit(1)
+        # 2) 找不到 → 自动下载备用引擎（无需任何参数）
+        print("⚠ 未找到本地微信/OCR 插件，自动下载备用引擎…", file=sys.stderr)
+        download_fallback(args.output)
+        print("\n✓ 备用引擎就绪。下一步见 README（仍需 wcocr.pyd 调用封装）。")
+        return
 
     version_dir = roots[0][1] if roots else extracted.parents[1]
 
