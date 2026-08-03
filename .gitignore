@@ -1,0 +1,19 @@
+# ---- 引擎二进制（微信专有资产，运行 extract_engine.py 本地生成）----
+engine/
+
+# ---- 逆向产物封装（无开源 license，不随仓库分发）----
+wcocr.pyd
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.pyc
+
+# ---- 微信 OCR 引擎运行产生的调试文件 ----
+debug.log
+
+# ---- 其他 ----
+.DS_Store
+Thumbs.db
+*.7z
+*.zip
