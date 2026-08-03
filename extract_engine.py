@@ -28,6 +28,8 @@ import os
 import re
 import shutil
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 APP_DATA = Path(os.environ.get("APPDATA", ""))
@@ -115,25 +117,66 @@ def extract(extracted: Path, version_dir: Path, output: Path) -> None:
     return is_wx4
 
 
+# 备用引擎下载地址（GitHub Release，本地找不到微信时兜底）
+FALLBACK_ENGINE_URL = (
+    "https://github.com/SongJohnHannah/mediaocr/releases/download/engine-v1/engine.zip"
+)
+
+
+def download_fallback(output: Path) -> None:
+    """下载备用引擎 zip 并解压到 output（零依赖，仅标准库）。"""
+    print(f"↓ 下载备用引擎: {FALLBACK_ENGINE_URL}")
+    tmp_zip = output.parent / "engine_fallback.zip"
+    output.mkdir(parents=True, exist_ok=True)
+    try:
+        req = urllib.request.Request(
+            FALLBACK_ENGINE_URL,
+            headers={"User-Agent": "mediaocr/1.0 (fallback download)"},
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp, open(tmp_zip, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        size_mb = tmp_zip.stat().st_size / 1024 / 1024
+        print(f"✓ 下载完成: {size_mb:.1f} MB")
+        with zipfile.ZipFile(tmp_zip) as z:
+            z.extractall(output)
+        print(f"✓ 已解压到: {output}")
+    finally:
+        try:
+            tmp_zip.unlink()
+        except OSError:
+            pass
+
+
 def main():
-    parser = argparse.ArgumentParser(description="从微信提取 OCR 引擎")
+    parser = argparse.ArgumentParser(description="从微信提取 OCR 引擎（或下载备用引擎）")
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "engine",
                         help="输出目录（默认: 脚本同级 engine/）")
+    parser.add_argument("--download", action="store_true",
+                        help="本地找不到微信时自动下载备用引擎（GitHub Release 33MB）")
+    parser.add_argument("--force-download", action="store_true",
+                        help="忽略本地微信，强制下载备用引擎")
     args = parser.parse_args()
+
+    # 强制下载模式
+    if args.force_download:
+        download_fallback(args.output)
+        print("\n✓ 备用引擎就绪。下一步见 README（仍需 wcocr.pyd 调用封装）。")
+        return
 
     # 1) 找微信
     roots = find_wechat_roots()
     extracted = find_ocr_plugin()
 
-    if not roots and not extracted:
-        print("错误: 未找到已安装的微信。请先安装微信（3.x 或 4.x）后重试。", file=sys.stderr)
-        sys.exit(1)
-
-    if extracted is None:
-        print("错误: 找到微信但未找到 OCR 插件。", file=sys.stderr)
-        print("  OCR 插件通常位于:", file=sys.stderr)
-        print("    %APPDATA%\\Tencent\\xwechat\\XPlugin\\plugins\\WeChatOcr\\", file=sys.stderr)
-        print("  请确认微信已完整安装（OCR 插件在首次使用图片文字识别后下载）。", file=sys.stderr)
+    if (not roots and not extracted) or extracted is None:
+        if args.download:
+            print("⚠ 未找到本地微信/OCR 插件，改用备用引擎下载…", file=sys.stderr)
+            download_fallback(args.output)
+            print("\n✓ 备用引擎就绪。下一步见 README（仍需 wcocr.pyd 调用封装）。")
+            return
+        print("错误: 未找到已安装的微信。", file=sys.stderr)
+        print("  方案 A: 安装微信（3.x 或 4.x）后重跑本脚本。", file=sys.stderr)
+        print("  方案 B: 加 --download 参数，自动下载备用引擎（GitHub Release 33MB）。", file=sys.stderr)
+        print("  方案 C: 加 --force-download 参数，强制下载（忽略本地微信）。", file=sys.stderr)
         sys.exit(1)
 
     version_dir = roots[0][1] if roots else extracted.parents[1]
