@@ -30,7 +30,8 @@
 | `Weixin.exe` | 3MB | Chromium 宿主（`--type=wxocr` 模式加载引擎） |
 | `mmmojo_64.dll` | 2.5MB | IPC 通信框架（唯一硬依赖） |
 
-> ⚠️ 引擎二进制为微信专有资产，**不随本仓库分发**，请运行 `extract_engine.py` 从你本机已安装的微信中提取（相当于自带引擎，无需联网下载任何东西）。
+> ✅ 引擎二进制**已随本仓库分发**（Windows + Linux 双平台兜底，clone 即用，无需联网下载）。
+> 引擎为微信专有资产，如需自行重新生成，可删除 `engine/` 后运行 `extract_engine.py`（Windows）或按下方 Linux 章节操作。
 
 ## 📦 安装
 
@@ -50,21 +51,16 @@ cd mediaocr
 uv venv --python 3.11 .venv
 uv pip install --python .venv/Scripts/python.exe "mcp[cli]==1.9.*"
 
-# 从本机微信提取 OCR 引擎（~55MB）
-.venv/Scripts/python.exe extract_engine.py
+# 引擎已随仓库分发（engine/ 目录），clone 即用，无需提取
+# 如需从本机微信重新生成：.venv/Scripts/python.exe extract_engine.py
 ```
 
-### 3. 获取 wcocr.pyd（调用封装）
+### 3. wcocr.pyd（Windows 调用封装，已随仓库分发）
 
-`wcocr.pyd` 是引擎调用封装，来自 [swigger/wechat-ocr](https://github.com/swigger/wechat-ocr) 的 demo-7 release（无开源 license，仅限个人自用）：
+仓库根目录已附带 `wcocr.pyd`（Python 3.11 ABI），clone 即用，无需下载。
 
-```bash
-# 从 GitHub release 下载 demo7.7z，解压后把 wcocr.pyd 复制到项目根目录
-curl -L -o demo7.7z https://github.com/swigger/wechat-ocr/releases/download/demo-7/demo7.7z
-# 解压后: cp demo7/wcocr.pyd ./
-```
-
-> 或者：自己按 [swigger/wechat-ocr](https://github.com/swigger/wechat-ocr) 的说明编译 `wcocr.pyd`。
+> 如需自行获取/重新编译：`wcocr.pyd` 来自 [swigger/wechat-ocr](https://github.com/swigger/wechat-ocr) 的 demo-7 release（无开源 license，仅限个人自用），
+> 可 `curl -L -o demo7.7z https://github.com/swigger/wechat-ocr/releases/download/demo-7/demo7.7z` 解压后替换，或按其说明自行编译。
 
 ### 4. 测试
 
@@ -82,6 +78,73 @@ curl -L -o demo7.7z https://github.com/swigger/wechat-ocr/releases/download/demo
     [0.999] 许昌市东城区嘉言懿行文化工作室
     ...
 ```
+
+---
+
+## 🐧 Linux 支持（同一套微信引擎）
+
+Linux 版微信同样内置端侧 OCR 引擎，本项目在 Linux 上使用**同一套微信引擎**
+（wxocr ELF + libmmmojo.so + ocr_model/），识别效果与 Windows 版一致。
+server.py 自动检测平台，双分支运行，**Windows / Linux 共用同一份代码与工具**。
+
+### Linux 版结构差异
+
+| Windows | Linux | 说明 |
+|---|---|---|
+| `engine/ocr_engine/wxocr.dll` | `engine/wxocr` | 引擎本体（Windows 是 DLL，Linux 是 ELF 可执行文件） |
+| `engine/<版本>/mmmojo_64.dll` | `engine/libmmmojo.so` | IPC 通信框架 |
+| `engine/Weixin.exe` | （无，wxocr 自包含） | Linux 的 wxocr 是独立守护进程，不需要 Chromium 宿主 |
+| `engine/ocr_engine/*.xnet` | `engine/ocr_model/*.xnet` | 模型 + 字符集（Linux 版还多 FPOCRRecog.xnet） |
+| `wcocr.pyd` | `wcocr.so` | Python 调用封装（同一套 swigger/wechat-ocr 源码编译） |
+
+### Linux 安装步骤（clone 即用）
+
+Linux 引擎（`engine/wxocr` + `libmmmojo.so` + `ocr_model/`）和 `wcocr.so` 都已随仓库分发，clone 后只需建环境：
+
+```bash
+# 1. 前置：uv（Python 3.11）+ mcp
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python "mcp[cli]==1.9.*"
+
+# 2. 测试
+.venv/bin/python test_client.py
+```
+
+> 如需**从零重新生成** Linux 引擎与 wcocr.so（引擎是微信专有资产，可按需自建）：
+>
+> ```bash
+> # 提取引擎（Linux 版微信 deb 包解压后拷贝，或已有 /opt/wechat 直接拷）
+> #    deb: https://linux.weixin.qq.com/ 的 WeChatLinux_x86_64.deb
+> dpkg-deb -x WeChatLinux_x86_64.deb wxdeb/
+> mkdir -p engine
+> cp wxdeb/opt/wechat/wxocr engine/
+> cp wxdeb/opt/wechat/libmmmojo.so engine/
+> cp -r wxdeb/opt/wechat/ocr_model engine/
+>
+> # 编译 wcocr.so（需 g++ C++20 + cmake，自动拉 protobuf）
+> git clone --depth 1 https://github.com/swigger/wechat-ocr.git
+> cd wechat-ocr
+> cmake -B build -DCMAKE_BUILD_TYPE=Release
+> cmake --build build -j$(nproc)
+> cp build/wcocr.cpython-311-x86_64-linux-gnu.so ../wcocr.so
+> ```
+
+### 接入 Hermes（Linux）
+
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  mediaocr:
+    command: /path/to/mediaocr/.venv/bin/python
+    args: [/path/to/mediaocr/server.py]
+    enabled: true
+```
+
+### Linux 已知差异
+
+- `wcocr.so` 已随仓库预编译分发（Python 3.11 ABI），一般无需自己编译；编译方法见上方"从零重新生成"
+- 提取引擎时无需微信安装目录结构，`wxocr` + `libmmmojo.so` + `ocr_model/` 三个文件即可独立运行
+- 引擎版本随微信更新，接口可能变动
 
 ## 🔌 接入 MCP 客户端
 

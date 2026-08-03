@@ -1,8 +1,7 @@
-# ---- 引擎二进制（微信专有资产，运行 extract_engine.py 本地生成）----
-engine/
-
-# ---- 逆向产物封装（无开源 license，不随仓库分发）----
-wcocr.pyd
+# ---- 引擎二进制已随仓库分发（clone 即用，Windows+Linux 双平台兜底）----
+# engine/ 与 wcocr.pyd / wcocr.so 是微信 OCR 引擎提取产物，已提交；
+# 若需重新生成，可删除后运行 extract_engine.py（Windows）或按 README Linux 章节编译。
+engine/debug.log
 
 # ---- Python ----
 .venv/

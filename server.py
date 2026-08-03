@@ -30,8 +30,16 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 ENGINE_DIR = _HERE / "engine"
-WECHAT_PATH = ENGINE_DIR / "4.1.11.55"          # 含 mmmojo_64.dll，父目录有 Weixin.exe
-WXOCR_DLL = ENGINE_DIR / "ocr_engine" / "wxocr.dll"
+IS_LINUX = sys.platform.startswith("linux")
+
+if IS_LINUX:
+    # Linux：wxocr ELF 引擎 + libmmmojo.so + ocr_model/（从 Linux 版微信提取）
+    WXOCR_EXE = ENGINE_DIR / "wxocr"
+    WECHAT_PATH = ENGINE_DIR          # 含 libmmmojo.so + ocr_model/
+else:
+    # Windows：微信 4.x 便携引擎（wxocr.dll + mmmojo_64.dll + Weixin.exe）
+    WECHAT_PATH = ENGINE_DIR / "4.1.11.55"   # 含 mmmojo_64.dll，父目录有 Weixin.exe
+    WXOCR_DLL = ENGINE_DIR / "ocr_engine" / "wxocr.dll"
 
 # 引擎不存在时的自动回退：使用已安装微信的 OCR 插件（需微信已安装）
 _FALLBACK_CANDIDATES = [
@@ -308,7 +316,16 @@ def create_server(ocr: WeChatOCR):
 
 
 def _find_engine() -> tuple[Path, Path] | None:
-    """定位 OCR 引擎，返回 (wxocr.dll 路径, 微信运行时目录)。"""
+    """定位 OCR 引擎，返回 (引擎路径, 运行时目录)。
+    Linux:  (wxocr ELF, engine/ 含 libmmmojo.so+ocr_model)
+    Windows: (wxocr.dll, engine/<版本>/ 含 mmmojo_64.dll)"""
+    if IS_LINUX:
+        # 1) 便携引擎：engine/wxocr + engine/libmmmojo.so + engine/ocr_model/
+        if (WXOCR_EXE.is_file()
+                and (ENGINE_DIR / "libmmmojo.so").is_file()
+                and (ENGINE_DIR / "ocr_model").is_dir()):
+            return WXOCR_EXE, WECHAT_PATH
+        return None
     # 1) 项目自带的便携引擎
     if WXOCR_DLL.is_file() and (WECHAT_PATH / "mmmojo_64.dll").is_file():
         return WXOCR_DLL, WECHAT_PATH
@@ -343,17 +360,31 @@ def main():
 
     engine = _find_engine()
     if engine is None:
-        print(
-            "ERROR: 找不到微信 OCR 引擎。\n"
-            "  请先运行:  python extract_engine.py\n"
-            "  （脚本会自动检索本机微信；找不到时自动下载备用引擎）\n"
-            "  或确认: 1) 项目 engine/ 目录完整；2) 本机已安装微信。",
-            file=sys.stderr,
-        )
+        if IS_LINUX:
+            print(
+                "ERROR: 找不到微信 OCR 引擎（Linux）。\n"
+                "  请确认 engine/ 目录完整: wxocr + libmmmojo.so + ocr_model/\n"
+                "  可从 Linux 版微信提取（/opt/wechat/wxocr 等），或参考 README。",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "ERROR: 找不到微信 OCR 引擎。\n"
+                "  请先运行:  python extract_engine.py\n"
+                "  （脚本会自动检索本机微信；找不到时自动下载备用引擎）\n"
+                "  或确认: 1) 项目 engine/ 目录完整；2) 本机已安装微信。",
+                file=sys.stderr,
+            )
         sys.exit(1)
     wxocr_dll, wechat_path = engine
     print(f"[mediaocr] 引擎: {wxocr_dll}", file=sys.stderr)
     print(f"[mediaocr] 运行时: {wechat_path}", file=sys.stderr)
+    if IS_LINUX:
+        print(
+            "[mediaocr] Linux 模式（wxocr ELF + libmmmojo.so），"
+            "需同目录放置 wcocr.so（编译自 swigger/wechat-ocr）",
+            file=sys.stderr,
+        )
 
     ocr = WeChatOCR(wxocr_dll, wechat_path)
     mcp = create_server(ocr)
