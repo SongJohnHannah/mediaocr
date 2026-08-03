@@ -1,4 +1,4 @@
-"""mediaocr 全工具测试：图片/批量/文本PDF/扫描PDF/视频/文本抽取"""
+"""mediaocr 2-tool 测试：ocr_image（单张/批量）+ ocr_document（PDF/视频）"""
 import asyncio
 import json
 import os
@@ -33,45 +33,43 @@ async def main():
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]
             print(f"✓ 工具列表: {names}")
+            assert names == ["ocr_image", "ocr_document"], f"工具列表不对: {names}"
 
-            # 验证触发词在描述里
             for t in tools.tools:
-                desc = t.description or ""
-                print(f"  描述长度[{t.name}]: {len(desc)} 字符")
+                print(f"  描述长度[{t.name}]: {len(t.description or '')} 字符")
 
-            # 1) ocr_image
-            r = await call(session, "ocr_image", {"image_path": IMG})
-            print(f"\n✓ ocr_image: errcode={r['errcode']} 行数={r['line_count']}")
+            # 1) ocr_image 单张（传单元素列表）
+            r = await call(session, "ocr_image", {"image_paths": [IMG]})
+            print(f"\n✓ ocr_image 单张: errcode={r['errcode']} 行数={r['line_count']}")
             print(f"  首行: {r['lines'][0]['text']}")
+            assert r["errcode"] == 0 and r["line_count"] >= 4
 
-            # 2) ocr_batch
-            r = await call(session, "ocr_batch", {"image_paths": [IMG, BIG]})
-            print(f"✓ ocr_batch: total={r['total']} success={r['success']}")
+            # 2) ocr_image 批量（多张）
+            r = await call(session, "ocr_image", {"image_paths": [IMG, BIG]})
+            print(f"✓ ocr_image 批量: total={r['total']} success={r['success']}")
+            assert r["success"] == 2
 
-            # 3) ocr_pdf 文本型
-            r = await call(session, "ocr_pdf", {"pdf_path": TEXT_PDF})
-            print(f"✓ ocr_pdf(文本型): pages={r['processed_pages']} 类型={r['pages'][0]['type']}")
-            print(f"  内容: {r['pages'][0]['text'][:60]!r}")
+            # 3) ocr_document 文本型 PDF
+            r = await call(session, "ocr_document", {"document_path": TEXT_PDF})
+            print(f"✓ ocr_document PDF(文本型): 类型={r['pages'][0]['type']}")
+            assert r["pages"][0]["type"] == "text_layer"
 
-            # 4) ocr_pdf 扫描型
-            r = await call(session, "ocr_pdf", {"pdf_path": SCAN_PDF})
-            print(f"✓ ocr_pdf(扫描型): pages={r['processed_pages']} 类型={r['pages'][0]['type']}")
-            print(f"  OCR: {r['pages'][0]['text'][:40]!r}")
+            # 4) ocr_document 扫描型 PDF
+            r = await call(session, "ocr_document", {"document_path": SCAN_PDF})
+            print(f"✓ ocr_document PDF(扫描型): 类型={r['pages'][0]['type']} OCR={r['pages'][0]['text'][:20]!r}")
+            assert r["pages"][0]["type"] == "ocr"
 
-            # 5) ocr_video
-            r = await call(session, "ocr_video", {"video_path": VIDEO, "interval_sec": 3.0, "max_frames": 3})
-            print(f"✓ ocr_video: frames={r['frames_processed']} 含文字帧={r['frames_with_text']}")
-            for f in r["frames"][:2]:
-                print(f"  {f['timestamp_sec']}s: {f['text'][:30]!r}")
+            # 5) ocr_document 视频
+            r = await call(session, "ocr_document", {"document_path": VIDEO, "interval_sec": 3.0, "max_frames": 3})
+            print(f"✓ ocr_document 视频: frames={r['frames_processed']} 含文字={r['frames_with_text']}")
+            assert r["frames_with_text"] >= 1
 
-            # 6) extract_pdf_text
-            r = await call(session, "extract_pdf_text", {"pdf_path": TEXT_PDF})
-            print(f"✓ extract_pdf_text: pages={r['total_pages']} 含文字={r['pages_with_text']}")
-            print(f"  内容: {r['text'][:50]!r}")
+            # 6) 错误处理：不支持的类型
+            r = await call(session, "ocr_document", {"document_path": r"C:\Users\songf\research\demo7\test_biz.png"})
+            print(f"✓ 错误处理(图片传给document): errcode={r['errcode']}")
+            assert r["errcode"] == -1
 
-            # 7) 错误处理：不存在的文件
-            r = await call(session, "ocr_image", {"image_path": r"C:\nope.png"})
-            print(f"✓ 错误处理: errcode={r['errcode']} error={r['error']!r}")
+            print("\n=== 全部测试通过 ===")
 
 
 if __name__ == "__main__":

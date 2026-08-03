@@ -108,6 +108,112 @@ def _ocr_image_inner(ocr: WeChatOCR, image_path: str) -> dict:
     return _format_result(result, str(Path(image_path).resolve()))
 
 
+def _ocr_pdf_inner(ocr: WeChatOCR, pdf: Path, max_pages: int = 20, dpi: int = 200) -> dict:
+    """PDF 识别：文本型直接抽取，扫描型渲染 + OCR。"""
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
+
+    pages_out = []
+    doc = fitz.open(str(pdf))
+    total = min(doc.page_count, max_pages)
+    for i in range(total):
+        page = doc[i]
+        text_layer = page.get_text().strip()
+        if len(text_layer) >= 10:
+            # 文本型 PDF：直接抽取
+            pages_out.append({
+                "page": i + 1,
+                "type": "text_layer",
+                "text": text_layer,
+                "line_count": len(text_layer.splitlines()),
+            })
+        else:
+            # 扫描型 PDF：渲染成图片再 OCR
+            pix = page.get_pixmap(dpi=dpi)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                tmp_img = f.name
+            pix.save(tmp_img)
+            try:
+                r = _ocr_image_inner(ocr, tmp_img)
+                pages_out.append({
+                    "page": i + 1,
+                    "type": "ocr",
+                    "text": r.get("text", ""),
+                    "line_count": r.get("line_count", 0),
+                })
+            finally:
+                # wxocr 引擎可能短暂持有文件句柄，重试删除
+                for _ in range(5):
+                    try:
+                        os.unlink(tmp_img)
+                        break
+                    except PermissionError:
+                        time.sleep(0.2)
+    doc.close()
+
+    ok = sum(1 for p in pages_out if p.get("text"))
+    full_text = "\n\n".join(
+        f"--- 第{p['page']}页 ---\n{p['text']}" for p in pages_out if p.get("text")
+    )
+    return {
+        "errcode": 0,
+        "source": str(pdf.resolve()),
+        "total_pages": total,
+        "processed_pages": len(pages_out),
+        "pages_with_text": ok,
+        "pages": pages_out,
+        "text": full_text,
+    }
+
+
+def _ocr_video_inner(ocr: WeChatOCR, video: Path, interval_sec: float = 5.0,
+                     max_frames: int = 10) -> dict:
+    """视频识别：ffmpeg 抽帧 + OCR。"""
+    if shutil.which("ffmpeg") is None:
+        return {"errcode": -1, "error": "未找到 ffmpeg，请先安装（https://ffmpeg.org）"}
+
+    frames_out = []
+    with tempfile.TemporaryDirectory() as td:
+        pattern = os.path.join(td, "frame_%04d.png")
+        # 抽帧：每 interval_sec 秒一帧
+        cmd = [
+            "ffmpeg", "-y", "-i", str(video),
+            "-vf", f"fps=1/{interval_sec}",
+            "-frames:v", str(max_frames),
+            pattern,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            return {"errcode": -1, "error": f"ffmpeg 抽帧失败: {r.stderr[-300:]}"}
+
+        frame_files = sorted(Path(td).glob("frame_*.png"))
+        for idx, f in enumerate(frame_files, 1):
+            ts = round((idx - 1) * interval_sec, 1)
+            res = _ocr_image_inner(ocr, str(f))
+            frames_out.append({
+                "frame": idx,
+                "timestamp_sec": ts,
+                "text": res.get("text", ""),
+                "line_count": res.get("line_count", 0),
+                "lines": res.get("lines", []),
+            })
+
+    ok = sum(1 for f in frames_out if f.get("text"))
+    full_text = "\n\n".join(
+        f"--- {f['timestamp_sec']}s ---\n{f['text']}" for f in frames_out if f.get("text")
+    )
+    return {
+        "errcode": 0,
+        "source": str(video.resolve()),
+        "frames_processed": len(frames_out),
+        "frames_with_text": ok,
+        "frames": frames_out,
+        "text": full_text,
+    }
+
+
 def create_server(ocr: WeChatOCR):
     from mcp.server.fastmcp import FastMCP
 
@@ -121,233 +227,81 @@ def create_server(ocr: WeChatOCR):
     )
 
     @mcp.tool()
-    def ocr_image(image_path: str) -> dict:
-        """识别图片/截图/扫描件/照片中的文字（微信本地 OCR，完全离线）。
+    def ocr_image(image_paths: list) -> dict:
+        """扫描图片/截图/扫描件/照片中的文字（微信本地 OCR，完全离线）。
 
-        【何时使用】用户要求从「已有的图片文件」中提取文字时使用本工具——
-        无论这张图是怎么来的（其他工具截的屏、视频截图、相机照片、扫描仪扫描件、
-        网页/聊天/PPT 截图、他人发来的图片），只要手里已有一个图片文件、
-        需要读里面的字，就用它。常见说法：图片扫描、图片识别、提取图片里的文字、
-        图片转文字、截图文字提取、把这张截图/图片的字读出来、扫描件识别、
-        营业执照识别、身份证识别、发票识别、收据/小票识别、票据识别、
-        合同识别、表格图片识别、书页拍照识别、手写文字识别、外语图片文字提取等。
+        【何时使用】用户要求「扫描」图片里的文字时使用本工具——无论这张图是怎么来的
+        （其他工具截的屏、视频截图、相机照片、扫描仪扫描件、网页/聊天/PPT 截图、
+        他人发来的图片），只要手里已有图片文件、需要扫描/提取里面的字，就用它。
+        传 1 个路径扫描单张，传多个路径自动批量扫描。常见说法：图片扫描、
+        扫描这张图/这些图、图片识别、提取图片里的文字、图片转文字、截图文字提取、
+        把这张截图/图片的字读出来、扫描件识别、营业执照扫描/识别、身份证扫描/识别、
+        发票扫描/识别、收据/小票扫描、票据识别、合同扫描识别、表格图片识别、
+        书页拍照识别、手写文字识别、外语图片文字提取等。
 
-        分工说明：本工具只负责「识别已有图片文件」，不负责截图/录屏动作——
+        分工说明：本工具只负责「扫描已有图片文件」，不负责截图/录屏动作——
         截屏、网页截图、视频截图等请用专门的截图工具（如 media-kit）先生成图片，
-        生成后的图片文字识别交给本工具。
+        生成后的图片扫描识别交给本工具。PDF 和视频请用 ocr_document 扫描。
 
         Args:
-            image_path: 图片绝对路径（jpg/png/bmp/webp/tiff 等）
+            image_paths: 图片绝对路径列表（1~20 张，jpg/png/bmp/webp/tiff 等）。
+                单张也传列表，如 ["C:\\a.png"]。
         Returns:
             errcode、图片尺寸、每行文字 {text, box 坐标, confidence 置信度}、纯文本
         """
-        return _ocr_image_inner(ocr, image_path)
-
-    @mcp.tool()
-    def ocr_batch(image_paths: list) -> dict:
-        """批量识别多张图片/截图/扫描件中的文字（微信本地 OCR，离线）。
-
-        【何时使用】多张图片需要一起提取文字（最多 20 张），或用户说
-        「把这些图片里的字都提取出来」「批量识别这些图片/截图/扫描件」。
-        图片来源不限：视频截图、网页截图、扫描件、照片均可。
-
-        Args:
-            image_paths: 图片绝对路径列表（1~20 张）
-        Returns:
-            total、success 计数 + 每张图片的完整识别结果
-        """
+        if isinstance(image_paths, str):
+            image_paths = [image_paths]  # 兼容误传单个字符串
+        if not isinstance(image_paths, list) or len(image_paths) == 0:
+            return {"errcode": -1, "error": "image_paths 必须是图片路径列表（1~20 张）"}
         if len(image_paths) > 20:
-            return {"errcode": -1, "error": "一次最多识别 20 张图片"}
+            return {"errcode": -1, "error": "一次最多扫描 20 张图片"}
         results = []
         for p in image_paths:
             results.append({"image_path": p, **_ocr_image_inner(ocr, p)})
         ok = sum(1 for r in results if r.get("errcode", -1) == 0)
+        if len(results) == 1:
+            # 单张：直接返回该图片的完整结果，方便使用
+            return {"errcode": 0, **results[0], "image_path": results[0]["image_path"]}
         return {"errcode": 0, "total": len(results), "success": ok, "results": results}
 
     @mcp.tool()
-    def ocr_pdf(pdf_path: str, max_pages: int = 20, dpi: int = 200) -> dict:
-        """识别 PDF 中的文字（微信本地 OCR，离线）。
+    def ocr_document(document_path: str, max_pages: int = 20, dpi: int = 200,
+                     interval_sec: float = 5.0, max_frames: int = 10) -> dict:
+        """扫描 PDF 或视频中的文字（自动判断类型，微信本地 OCR，离线）。
 
-        【何时使用】用户要求提取 PDF 里的文字时使用：
-        扫描版 PDF / PDF扫描件 / 图片型PDF / PDF里的图片文字 / 扫描文档转文字 /
-        PDF转Word前的文字提取等。自动判断类型：
-          - 文本型 PDF（有文字层）→ 直接抽取文本，不 OCR（快）
-          - 扫描型 PDF（纯图片）→ 逐页渲染成图片后 OCR
+        【何时使用】用户要求「扫描」PDF 或视频里的文字时使用本工具，自动识别文件类型：
+          - PDF（.pdf）：扫描 PDF 文字，自动判断文本型/扫描型——有文字层直接抽取（快），
+            纯图片扫描件逐页渲染后 OCR。适用：扫描版 PDF、PDF扫描件、图片型 PDF、
+            PDF里的图片文字、扫描文档转文字、PDF转Word前的文字提取、复制PDF文字。
+          - 视频（.mp4/.mkv/.avi/.mov/.flv/.webm/.wmv/.ts）：扫描视频画面文字，
+            ffmpeg 自动抽帧 + OCR，提取字幕/标题/弹幕/画面文字。适用：视频字幕提取、
+            扫描视频里的字、从视频中找出说了什么字等，无需先手动截图。
 
-        分工说明：本工具直接吃 PDF 文件，无需先转图片。
-
-        Args:
-            pdf_path: PDF 文件绝对路径
-            max_pages: 最多处理页数（默认 20，防止超大文件）
-            dpi: 渲染分辨率（默认 200，扫描件建议 200~300）
-        Returns:
-            每页的识别结果 {page, text, lines}
-        """
-        pdf = Path(pdf_path)
-        if not pdf.is_file():
-            return {"errcode": -1, "error": f"PDF 不存在: {pdf_path}"}
-        try:
-            import fitz  # pymupdf
-        except ImportError:
-            return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
-
-        pages_out = []
-        doc = fitz.open(str(pdf))
-        total = min(doc.page_count, max_pages)
-        for i in range(total):
-            page = doc[i]
-            text_layer = page.get_text().strip()
-            if len(text_layer) >= 10:
-                # 文本型 PDF：直接抽取
-                pages_out.append({
-                    "page": i + 1,
-                    "type": "text_layer",
-                    "text": text_layer,
-                    "line_count": len(text_layer.splitlines()),
-                })
-            else:
-                # 扫描型 PDF：渲染成图片再 OCR
-                pix = page.get_pixmap(dpi=dpi)
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                    tmp_img = f.name
-                pix.save(tmp_img)
-                try:
-                    r = _ocr_image_inner(ocr, tmp_img)
-                    pages_out.append({
-                        "page": i + 1,
-                        "type": "ocr",
-                        "text": r.get("text", ""),
-                        "line_count": r.get("line_count", 0),
-                    })
-                finally:
-                    # wxocr 引擎可能短暂持有文件句柄，重试删除
-                    for _ in range(5):
-                        try:
-                            os.unlink(tmp_img)
-                            break
-                        except PermissionError:
-                            time.sleep(0.2)
-        doc.close()
-
-        ok = sum(1 for p in pages_out if p.get("text"))
-        full_text = "\n\n".join(
-            f"--- 第{p['page']}页 ---\n{p['text']}" for p in pages_out if p.get("text")
-        )
-        return {
-            "errcode": 0,
-            "source": str(pdf.resolve()),
-            "total_pages": total,
-            "processed_pages": len(pages_out),
-            "pages_with_text": ok,
-            "pages": pages_out,
-            "text": full_text,
-        }
-
-    @mcp.tool()
-    def ocr_video(video_path: str, interval_sec: float = 5.0, max_frames: int = 10) -> dict:
-        """识别视频画面中的文字（字幕/标题/弹幕/画面文字，微信本地 OCR，离线）。
-
-        【何时使用】用户要求提取视频里的文字/字幕时使用：视频字幕提取、
-        视频里的字、视频中的弹幕/标题/文字、从视频中找出说了什么字等。
-        内部用 ffmpeg 自动抽帧 + OCR，无需先手动截图。
-
-        分工说明：
-          - 如果已有的是「视频文件」→ 用本工具（自动抽帧识别）
-          - 如果已有的是「视频截图/任意图片文件」→ 用 ocr_image 识别
+        分工说明：本工具直接扫描 PDF/视频文件，无需先转图片。
+          - 已有的是「图片文件/视频截图」→ 用 ocr_image 扫描
           - 本工具不做视频下载，下载请用专门的下载工具（如 media-kit）
 
         Args:
-            video_path: 视频文件绝对路径（mp4/mkv/avi/mov/flv 等）
-            interval_sec: 抽帧间隔秒数（默认 5 秒一帧）
-            max_frames: 最多识别帧数（默认 10 帧）
+            document_path: PDF 或视频文件绝对路径
+            max_pages: PDF 最多处理页数（默认 20）
+            dpi: PDF 渲染分辨率（默认 200，扫描件建议 200~300）
+            interval_sec: 视频抽帧间隔秒数（默认 5 秒一帧）
+            max_frames: 视频最多识别帧数（默认 10 帧）
         Returns:
-            每帧的识别结果 {timestamp, text, lines}
+            PDF: 每页结果 {page, type, text} + 全文；视频: 每帧结果 {frame, timestamp, text} + 全文
         """
-        video = Path(video_path)
-        if not video.is_file():
-            return {"errcode": -1, "error": f"视频不存在: {video_path}"}
-        if shutil.which("ffmpeg") is None:
-            return {"errcode": -1, "error": "未找到 ffmpeg，请先安装（https://ffmpeg.org）"}
+        doc = Path(document_path)
+        if not doc.is_file():
+            return {"errcode": -1, "error": f"文件不存在: {document_path}"}
 
-        frames_out = []
-        with tempfile.TemporaryDirectory() as td:
-            pattern = os.path.join(td, "frame_%04d.png")
-            # 抽帧：每 interval_sec 秒一帧
-            cmd = [
-                "ffmpeg", "-y", "-i", str(video),
-                "-vf", f"fps=1/{interval_sec}",
-                "-frames:v", str(max_frames),
-                pattern,
-            ]
-            r = subprocess.run(cmd, capture_output=True, text=True)
-            if r.returncode != 0:
-                return {"errcode": -1, "error": f"ffmpeg 抽帧失败: {r.stderr[-300:]}"}
-
-            frame_files = sorted(Path(td).glob("frame_*.png"))
-            for idx, f in enumerate(frame_files, 1):
-                ts = round((idx - 1) * interval_sec, 1)
-                res = _ocr_image_inner(ocr, str(f))
-                frames_out.append({
-                    "frame": idx,
-                    "timestamp_sec": ts,
-                    "text": res.get("text", ""),
-                    "line_count": res.get("line_count", 0),
-                    "lines": res.get("lines", []),
-                })
-
-        ok = sum(1 for f in frames_out if f.get("text"))
-        full_text = "\n\n".join(
-            f"--- {f['timestamp_sec']}s ---\n{f['text']}" for f in frames_out if f.get("text")
-        )
+        ext = doc.suffix.lower()
+        if ext == ".pdf":
+            return _ocr_pdf_inner(ocr, doc, max_pages, dpi)
+        if ext in (".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm", ".wmv", ".ts", ".m4v", ".mpeg", ".mpg"):
+            return _ocr_video_inner(ocr, doc, interval_sec, max_frames)
         return {
-            "errcode": 0,
-            "source": str(video.resolve()),
-            "frames_processed": len(frames_out),
-            "frames_with_text": ok,
-            "frames": frames_out,
-            "text": full_text,
-        }
-
-    @mcp.tool()
-    def extract_pdf_text(pdf_path: str, max_pages: int = 100) -> dict:
-        """提取文本型 PDF 的文字层（快速，不 OCR）。
-
-        【何时使用】PDF 是电子文档（有文字层，如网页导出、Word 转的 PDF）、
-        用户要「复制 PDF 里的文字」「把 PDF 转成文本/markdown」时使用，速度快。
-        扫描件/图片型 PDF 请用 ocr_pdf（会自动 OCR）。
-
-        分工说明：本工具只抽取文字层，不做 OCR；不确定 PDF 类型时直接用 ocr_pdf
-        （它会自动判断：有文字层就抽取，纯图片就 OCR）。
-
-        Args:
-            pdf_path: PDF 文件绝对路径
-            max_pages: 最多提取页数（默认 100）
-        Returns:
-            每页文本 + 全文
-        """
-        pdf = Path(pdf_path)
-        if not pdf.is_file():
-            return {"errcode": -1, "error": f"PDF 不存在: {pdf_path}"}
-        try:
-            import fitz
-        except ImportError:
-            return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
-
-        doc = fitz.open(str(pdf))
-        total = min(doc.page_count, max_pages)
-        pages = []
-        for i in range(total):
-            t = doc[i].get_text().strip()
-            pages.append({"page": i + 1, "text": t, "chars": len(t)})
-        doc.close()
-        full = "\n\n".join(f"--- 第{p['page']}页 ---\n{p['text']}" for p in pages if p["text"])
-        return {
-            "errcode": 0,
-            "source": str(pdf.resolve()),
-            "total_pages": total,
-            "pages_with_text": sum(1 for p in pages if p["text"]),
-            "pages": pages,
-            "text": full,
+            "errcode": -1,
+            "error": f"不支持的文件类型: {ext}。PDF 请传 .pdf，视频请传 mp4/mkv/avi/mov/flv/webm 等；图片请用 ocr_image。",
         }
 
     return mcp
