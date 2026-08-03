@@ -1,24 +1,25 @@
 """
-WeChat OCR MCP Server
-=====================
-调用微信自带的本地 OCR 引擎（wxocr.dll），通过 MCP 协议暴露为 AI 可用的工具。
+mediaocr — 微信本地 OCR 引擎 MCP Server
+========================================
+调用微信内置的端侧 OCR 引擎（wxocr.dll），通过 MCP 协议暴露为 AI 可用的工具。
 
-原理：微信 Windows 客户端内置端侧 OCR 引擎（文本检测 + 识别模型），
-本 server 直接调用引擎 DLL，完全离线、无需网络、无需登录。
+能力：
+  - ocr_image   图片/截图文字识别（单张）
+  - ocr_batch   批量图片识别
+  - ocr_pdf     扫描版 PDF 识别（逐页渲染 + OCR；文本型 PDF 直接抽取文本）
+  - ocr_video   视频画面文字识别（ffmpeg 抽帧 + OCR）
+  - extract_pdf_text  文本型 PDF 直接抽取文字（无需 OCR）
 
-依赖（已随项目自带）：
-  - engine/  —— 便携 OCR 引擎（Weixin.exe 宿主 + mmmojo_64.dll + wxocr.dll + .xnet 模型）
-  - wcocr.pyd —— 引擎调用封装（CPython 3.11 x64）
-
-用法：
-  uv run python server.py              # stdio 模式（MCP 默认）
-  uv run python server.py --http 8000  # HTTP/SSE 模式（调试用）
+完全离线 · 无需网络 · 无需登录 · 中文识别对标腾讯
 """
 
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -42,36 +43,9 @@ _FALLBACK_CANDIDATES = [
      r"C:\Program Files (x86)\Tencent\WeChat"),
 ]
 
-
-def _find_engine() -> tuple[Path, Path] | None:
-    """定位 OCR 引擎，返回 (wxocr.dll 路径, 微信运行时目录)。"""
-    # 1) 项目自带的便携引擎
-    if WXOCR_DLL.is_file() and (WECHAT_PATH / "mmmojo_64.dll").is_file():
-        return WXOCR_DLL, WECHAT_PATH
-    # 2) 已安装的微信
-    for plugin_root, wechat_root in _FALLBACK_CANDIDATES:
-        if not plugin_root.is_dir() or not wechat_root.is_dir():
-            continue
-        # 找最新版本的 OCR 插件
-        versions = sorted(
-            (d for d in plugin_root.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime, reverse=True,
-        )
-        for vdir in versions:
-            extracted = vdir / "extracted"
-            dll_candidates = [extracted / "wxocr.dll", extracted / "WeChatOCR.exe"]
-            for dll in dll_candidates:
-                if not dll.is_file():
-                    continue
-                # 微信版本目录（含 mmmojo_64.dll）
-                ver_dirs = sorted(
-                    (d for d in wechat_root.iterdir() if d.is_dir() and d.name[0].isdigit()),
-                    key=lambda d: d.stat().st_mtime, reverse=True,
-                )
-                for vd in ver_dirs:
-                    if (vd / "mmmojo_64.dll").is_file():
-                        return dll, vd
-    return None
+# ── 触发词描述（供 LLM 判断何时调用）──────────────────────────────
+# 说明：各工具的描述(docstring)中已内置「何时使用」触发词，
+# 让任何 MCP 客户端（Hermes/Claude/Cursor 等）见到相关自然语言描述即触发。
 
 
 class WeChatOCR:
@@ -101,78 +75,315 @@ class WeChatOCR:
         return result
 
 
-# ---------- MCP 工具 ----------
+def _format_result(result: dict, source: str) -> dict:
+    """把 wcocr 原始结果整理成友好的 JSON。"""
+    lines = []
+    for item in result.get("ocr_response", []):
+        lines.append({
+            "text": item.get("text", ""),
+            "confidence": round(item.get("rate", 0.0), 4),
+            "box": {
+                "left": round(item.get("left", 0), 1),
+                "top": round(item.get("top", 0), 1),
+                "right": round(item.get("right", 0), 1),
+                "bottom": round(item.get("bottom", 0), 1),
+            },
+        })
+    return {
+        "errcode": result.get("errcode", 0),
+        "source": source,
+        "width": result.get("width"),
+        "height": result.get("height"),
+        "line_count": len(lines),
+        "lines": lines,
+        "text": "\n".join(l["text"] for l in lines),
+    }
+
+
+def _ocr_image_inner(ocr: WeChatOCR, image_path: str) -> dict:
+    try:
+        result = ocr.ocr(image_path)
+    except Exception as e:
+        return {"errcode": -1, "error": str(e), "source": image_path}
+    return _format_result(result, str(Path(image_path).resolve()))
+
 
 def create_server(ocr: WeChatOCR):
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP(
-        "wechat-ocr",
+        "mediaocr",
         instructions=(
-            "微信本地 OCR 工具：离线识别图片中的文字（中文/英文），"
-            "返回每行文字、坐标框和置信度。支持单张识别与批量识别。"
+            "mediaocr：微信本地 OCR 引擎（离线）。"
+            "用户请求提取任何图片/截图/扫描件/PDF/视频画面中的文字时，"
+            "优先使用本服务器工具。识别中文效果对标腾讯，完全离线运行。"
         ),
     )
 
     @mcp.tool()
     def ocr_image(image_path: str) -> dict:
-        """识别单张图片中的文字（微信本地 OCR 引擎，离线运行）。
+        """识别图片/截图/扫描件/照片中的文字（微信本地 OCR，完全离线）。
+
+        【何时使用】用户要求从「已有的图片文件」中提取文字时使用本工具——
+        无论这张图是怎么来的（其他工具截的屏、视频截图、相机照片、扫描仪扫描件、
+        网页/聊天/PPT 截图、他人发来的图片），只要手里已有一个图片文件、
+        需要读里面的字，就用它。常见说法：图片扫描、图片识别、提取图片里的文字、
+        图片转文字、截图文字提取、把这张截图/图片的字读出来、扫描件识别、
+        营业执照识别、身份证识别、发票识别、收据/小票识别、票据识别、
+        合同识别、表格图片识别、书页拍照识别、手写文字识别、外语图片文字提取等。
+
+        分工说明：本工具只负责「识别已有图片文件」，不负责截图/录屏动作——
+        截屏、网页截图、视频截图等请用专门的截图工具（如 media-kit）先生成图片，
+        生成后的图片文字识别交给本工具。
 
         Args:
-            image_path: 图片的绝对路径（支持 jpg/png/bmp/webp 等）
+            image_path: 图片绝对路径（jpg/png/bmp/webp/tiff 等）
         Returns:
-            识别结果：图片尺寸 + 每行文字 {text, 坐标, rate 置信度}
+            errcode、图片尺寸、每行文字 {text, box 坐标, confidence 置信度}、纯文本
         """
-        try:
-            result = ocr.ocr(image_path)
-        except Exception as e:
-            return {"errcode": -1, "error": str(e)}
-
-        lines = []
-        for item in result.get("ocr_response", []):
-            lines.append({
-                "text": item.get("text", ""),
-                "confidence": round(item.get("rate", 0.0), 4),
-                "box": {
-                    "left": round(item.get("left", 0), 1),
-                    "top": round(item.get("top", 0), 1),
-                    "right": round(item.get("right", 0), 1),
-                    "bottom": round(item.get("bottom", 0), 1),
-                },
-            })
-        return {
-            "errcode": result.get("errcode", 0),
-            "image_path": str(Path(image_path).resolve()),
-            "width": result.get("width"),
-            "height": result.get("height"),
-            "line_count": len(lines),
-            "lines": lines,
-            "text": "\n".join(l["text"] for l in lines),  # 纯文本方便直接使用
-        }
+        return _ocr_image_inner(ocr, image_path)
 
     @mcp.tool()
     def ocr_batch(image_paths: list) -> dict:
-        """批量识别多张图片中的文字。
+        """批量识别多张图片/截图/扫描件中的文字（微信本地 OCR，离线）。
+
+        【何时使用】多张图片需要一起提取文字（最多 20 张），或用户说
+        「把这些图片里的字都提取出来」「批量识别这些图片/截图/扫描件」。
+        图片来源不限：视频截图、网页截图、扫描件、照片均可。
 
         Args:
-            image_paths: 图片绝对路径列表（最多 20 张）
+            image_paths: 图片绝对路径列表（1~20 张）
         Returns:
-            每张图片的识别结果
+            total、success 计数 + 每张图片的完整识别结果
         """
         if len(image_paths) > 20:
             return {"errcode": -1, "error": "一次最多识别 20 张图片"}
         results = []
         for p in image_paths:
-            r = ocr_image(p)
-            results.append({"image_path": p, **r})
+            results.append({"image_path": p, **_ocr_image_inner(ocr, p)})
         ok = sum(1 for r in results if r.get("errcode", -1) == 0)
         return {"errcode": 0, "total": len(results), "success": ok, "results": results}
+
+    @mcp.tool()
+    def ocr_pdf(pdf_path: str, max_pages: int = 20, dpi: int = 200) -> dict:
+        """识别 PDF 中的文字（微信本地 OCR，离线）。
+
+        【何时使用】用户要求提取 PDF 里的文字时使用：
+        扫描版 PDF / PDF扫描件 / 图片型PDF / PDF里的图片文字 / 扫描文档转文字 /
+        PDF转Word前的文字提取等。自动判断类型：
+          - 文本型 PDF（有文字层）→ 直接抽取文本，不 OCR（快）
+          - 扫描型 PDF（纯图片）→ 逐页渲染成图片后 OCR
+
+        分工说明：本工具直接吃 PDF 文件，无需先转图片。
+
+        Args:
+            pdf_path: PDF 文件绝对路径
+            max_pages: 最多处理页数（默认 20，防止超大文件）
+            dpi: 渲染分辨率（默认 200，扫描件建议 200~300）
+        Returns:
+            每页的识别结果 {page, text, lines}
+        """
+        pdf = Path(pdf_path)
+        if not pdf.is_file():
+            return {"errcode": -1, "error": f"PDF 不存在: {pdf_path}"}
+        try:
+            import fitz  # pymupdf
+        except ImportError:
+            return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
+
+        pages_out = []
+        doc = fitz.open(str(pdf))
+        total = min(doc.page_count, max_pages)
+        for i in range(total):
+            page = doc[i]
+            text_layer = page.get_text().strip()
+            if len(text_layer) >= 10:
+                # 文本型 PDF：直接抽取
+                pages_out.append({
+                    "page": i + 1,
+                    "type": "text_layer",
+                    "text": text_layer,
+                    "line_count": len(text_layer.splitlines()),
+                })
+            else:
+                # 扫描型 PDF：渲染成图片再 OCR
+                pix = page.get_pixmap(dpi=dpi)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    tmp_img = f.name
+                pix.save(tmp_img)
+                try:
+                    r = _ocr_image_inner(ocr, tmp_img)
+                    pages_out.append({
+                        "page": i + 1,
+                        "type": "ocr",
+                        "text": r.get("text", ""),
+                        "line_count": r.get("line_count", 0),
+                    })
+                finally:
+                    # wxocr 引擎可能短暂持有文件句柄，重试删除
+                    for _ in range(5):
+                        try:
+                            os.unlink(tmp_img)
+                            break
+                        except PermissionError:
+                            time.sleep(0.2)
+        doc.close()
+
+        ok = sum(1 for p in pages_out if p.get("text"))
+        full_text = "\n\n".join(
+            f"--- 第{p['page']}页 ---\n{p['text']}" for p in pages_out if p.get("text")
+        )
+        return {
+            "errcode": 0,
+            "source": str(pdf.resolve()),
+            "total_pages": total,
+            "processed_pages": len(pages_out),
+            "pages_with_text": ok,
+            "pages": pages_out,
+            "text": full_text,
+        }
+
+    @mcp.tool()
+    def ocr_video(video_path: str, interval_sec: float = 5.0, max_frames: int = 10) -> dict:
+        """识别视频画面中的文字（字幕/标题/弹幕/画面文字，微信本地 OCR，离线）。
+
+        【何时使用】用户要求提取视频里的文字/字幕时使用：视频字幕提取、
+        视频里的字、视频中的弹幕/标题/文字、从视频中找出说了什么字等。
+        内部用 ffmpeg 自动抽帧 + OCR，无需先手动截图。
+
+        分工说明：
+          - 如果已有的是「视频文件」→ 用本工具（自动抽帧识别）
+          - 如果已有的是「视频截图/任意图片文件」→ 用 ocr_image 识别
+          - 本工具不做视频下载，下载请用专门的下载工具（如 media-kit）
+
+        Args:
+            video_path: 视频文件绝对路径（mp4/mkv/avi/mov/flv 等）
+            interval_sec: 抽帧间隔秒数（默认 5 秒一帧）
+            max_frames: 最多识别帧数（默认 10 帧）
+        Returns:
+            每帧的识别结果 {timestamp, text, lines}
+        """
+        video = Path(video_path)
+        if not video.is_file():
+            return {"errcode": -1, "error": f"视频不存在: {video_path}"}
+        if shutil.which("ffmpeg") is None:
+            return {"errcode": -1, "error": "未找到 ffmpeg，请先安装（https://ffmpeg.org）"}
+
+        frames_out = []
+        with tempfile.TemporaryDirectory() as td:
+            pattern = os.path.join(td, "frame_%04d.png")
+            # 抽帧：每 interval_sec 秒一帧
+            cmd = [
+                "ffmpeg", "-y", "-i", str(video),
+                "-vf", f"fps=1/{interval_sec}",
+                "-frames:v", str(max_frames),
+                pattern,
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                return {"errcode": -1, "error": f"ffmpeg 抽帧失败: {r.stderr[-300:]}"}
+
+            frame_files = sorted(Path(td).glob("frame_*.png"))
+            for idx, f in enumerate(frame_files, 1):
+                ts = round((idx - 1) * interval_sec, 1)
+                res = _ocr_image_inner(ocr, str(f))
+                frames_out.append({
+                    "frame": idx,
+                    "timestamp_sec": ts,
+                    "text": res.get("text", ""),
+                    "line_count": res.get("line_count", 0),
+                    "lines": res.get("lines", []),
+                })
+
+        ok = sum(1 for f in frames_out if f.get("text"))
+        full_text = "\n\n".join(
+            f"--- {f['timestamp_sec']}s ---\n{f['text']}" for f in frames_out if f.get("text")
+        )
+        return {
+            "errcode": 0,
+            "source": str(video.resolve()),
+            "frames_processed": len(frames_out),
+            "frames_with_text": ok,
+            "frames": frames_out,
+            "text": full_text,
+        }
+
+    @mcp.tool()
+    def extract_pdf_text(pdf_path: str, max_pages: int = 100) -> dict:
+        """提取文本型 PDF 的文字层（快速，不 OCR）。
+
+        【何时使用】PDF 是电子文档（有文字层，如网页导出、Word 转的 PDF）、
+        用户要「复制 PDF 里的文字」「把 PDF 转成文本/markdown」时使用，速度快。
+        扫描件/图片型 PDF 请用 ocr_pdf（会自动 OCR）。
+
+        分工说明：本工具只抽取文字层，不做 OCR；不确定 PDF 类型时直接用 ocr_pdf
+        （它会自动判断：有文字层就抽取，纯图片就 OCR）。
+
+        Args:
+            pdf_path: PDF 文件绝对路径
+            max_pages: 最多提取页数（默认 100）
+        Returns:
+            每页文本 + 全文
+        """
+        pdf = Path(pdf_path)
+        if not pdf.is_file():
+            return {"errcode": -1, "error": f"PDF 不存在: {pdf_path}"}
+        try:
+            import fitz
+        except ImportError:
+            return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
+
+        doc = fitz.open(str(pdf))
+        total = min(doc.page_count, max_pages)
+        pages = []
+        for i in range(total):
+            t = doc[i].get_text().strip()
+            pages.append({"page": i + 1, "text": t, "chars": len(t)})
+        doc.close()
+        full = "\n\n".join(f"--- 第{p['page']}页 ---\n{p['text']}" for p in pages if p["text"])
+        return {
+            "errcode": 0,
+            "source": str(pdf.resolve()),
+            "total_pages": total,
+            "pages_with_text": sum(1 for p in pages if p["text"]),
+            "pages": pages,
+            "text": full,
+        }
 
     return mcp
 
 
+def _find_engine() -> tuple[Path, Path] | None:
+    """定位 OCR 引擎，返回 (wxocr.dll 路径, 微信运行时目录)。"""
+    # 1) 项目自带的便携引擎
+    if WXOCR_DLL.is_file() and (WECHAT_PATH / "mmmojo_64.dll").is_file():
+        return WXOCR_DLL, WECHAT_PATH
+    # 2) 已安装的微信
+    for plugin_root, wechat_root in _FALLBACK_CANDIDATES:
+        if not plugin_root.is_dir() or not wechat_root.is_dir():
+            continue
+        versions = sorted(
+            (d for d in plugin_root.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime, reverse=True,
+        )
+        for vdir in versions:
+            extracted = vdir / "extracted"
+            dll_candidates = [extracted / "wxocr.dll", extracted / "WeChatOCR.exe"]
+            for dll in dll_candidates:
+                if not dll.is_file():
+                    continue
+                ver_dirs = sorted(
+                    (d for d in wechat_root.iterdir() if d.is_dir() and d.name[0].isdigit()),
+                    key=lambda d: d.stat().st_mtime, reverse=True,
+                )
+                for vd in ver_dirs:
+                    if (vd / "mmmojo_64.dll").is_file():
+                        return dll, vd
+    return None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="WeChat OCR MCP Server")
+    parser = argparse.ArgumentParser(description="mediaocr - WeChat OCR MCP Server")
     parser.add_argument("--http", type=int, default=0, help="HTTP 端口（默认 stdio）")
     args = parser.parse_args()
 
@@ -187,14 +398,14 @@ def main():
         )
         sys.exit(1)
     wxocr_dll, wechat_path = engine
-    print(f"[wechat-ocr] 引擎: {wxocr_dll}", file=sys.stderr)
-    print(f"[wechat-ocr] 运行时: {wechat_path}", file=sys.stderr)
+    print(f"[mediaocr] 引擎: {wxocr_dll}", file=sys.stderr)
+    print(f"[mediaocr] 运行时: {wechat_path}", file=sys.stderr)
 
     ocr = WeChatOCR(wxocr_dll, wechat_path)
     mcp = create_server(ocr)
 
     if args.http:
-        print(f"[wechat-ocr] HTTP 模式 http://127.0.0.1:{args.http}/mcp", file=sys.stderr)
+        print(f"[mediaocr] HTTP 模式 http://127.0.0.1:{args.http}/mcp", file=sys.stderr)
         mcp.run(transport="http", host="127.0.0.1", port=args.http)
     else:
         mcp.run(transport="stdio")

@@ -115,8 +115,26 @@ mcp_servers:
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `ocr_image` | `image_path: str` | 单张图片识别，返回每行文字 + 坐标框 + 置信度 + 纯文本 |
+| `ocr_image` | `image_path: str` | 单张图片/截图/扫描件识别，返回每行文字+坐标框+置信度+纯文本 |
 | `ocr_batch` | `image_paths: list` | 批量识别（≤20 张） |
+| `ocr_pdf` | `pdf_path, max_pages, dpi` | PDF 识别：文本型自动抽取，扫描型自动渲染+OCR |
+| `ocr_video` | `video_path, interval_sec, max_frames` | 视频画面文字识别（ffmpeg 抽帧+OCR，字幕/标题/弹幕） |
+| `extract_pdf_text` | `pdf_path, max_pages` | 文本型 PDF 快速提取文字层（不 OCR） |
+
+> 每个工具的 description 都内置了「何时使用」触发词（图片扫描、截图文字提取、
+> 营业执照/发票识别、PDF 扫描件、视频字幕提取等），任何 MCP 客户端
+> （Hermes / Claude Desktop / Cursor）看到相关自然语言描述即会自动触发。
+
+### 工具分工（避免与其他工具混淆）
+
+| 需求 | 用哪个工具 |
+|---|---|
+| 已有图片文件/截图/视频截图 → 读字 | `ocr_image` / `ocr_batch` |
+| 截屏、网页截图、视频截图动作本身 | 专门的截图工具（如 media-kit） |
+| 已有视频文件 → 提取字幕/画面文字 | `ocr_video`（自动抽帧，无需先截图） |
+| 已有 PDF（扫描件或电子版）→ 读字 | `ocr_pdf`（自动判断类型） |
+| 已有文本型 PDF → 快速复制文字 | `extract_pdf_text` |
+| 下载视频/网页内容 | 专门的下载工具（如 media-kit） |
 
 ## 🗺 项目结构
 
