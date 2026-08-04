@@ -19,3 +19,7 @@ test_img.png
 Thumbs.db
 *.7z
 *.zip
+engine/debug.log
+
+# ---- 本地计划文档 ----
+.hermes/

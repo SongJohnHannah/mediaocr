@@ -16,7 +16,13 @@ if IS_LINUX:
 else:
     PYTHON = str(_HERE / ".venv" / "Scripts" / "python.exe")
 SERVER = str(_HERE / "server.py")
+
+# 测试图片：优先用项目内 test_img.png（用户自备），否则退回示例图
 TEST_IMG = str(_HERE / "test_img.png")
+if not Path(TEST_IMG).is_file():
+    _fallback = Path(r"C:\Users\songf\research\demo7\test_biz.png")
+    if _fallback.is_file():
+        TEST_IMG = str(_fallback)
 
 
 async def main():
@@ -34,6 +40,9 @@ async def main():
             assert "ocr_image" in names and "ocr_document" in names, "工具列表不完整"
 
             # 3) 调用 ocr_image（单张）
+            if not Path(TEST_IMG).is_file():
+                print(f"⚠ 测试图片不存在: {TEST_IMG}（跳过 ocr_image 调用验证）")
+                return
             result = await session.call_tool("ocr_image", {"image_paths": [TEST_IMG]})
             for content in result.content:
                 if content.type == "text":
