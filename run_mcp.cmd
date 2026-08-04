@@ -1,5 +1,5 @@
 @echo off
-rem WeChat OCR MCP Server launcher
-rem Clears PYTHONPATH to avoid importing wrong mcp lib from Hermes venv
+rem mediaocr MCP Server launcher (Windows)
+rem 用当前目录(%~dp0)定位 .venv 和 server.py，可放在任意位置
 set "PYTHONPATH="
-"C:\Users\songf\wechat-ocr-mcp\.venv\Scripts\python.exe" "C:\Users\songf\wechat-ocr-mcp\server.py" %*
+"%~dp0.venv\Scripts\python.exe" "%~dp0server.py" %*

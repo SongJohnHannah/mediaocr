@@ -108,6 +108,72 @@ def _format_result(result: dict, source: str) -> dict:
     }
 
 
+# ── 依赖自动安装（首次用到时懒加载，缺啥装啥，全程不碰系统环境）──────────
+_PIP_LOCK = threading.Lock()
+
+
+def _pip_install(pkg: str) -> bool:
+    """用当前解释器静默安装 Python 包到当前 venv；成功返回 True。"""
+    with _PIP_LOCK:
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet",
+                 "--disable-pip-version-check", "--no-input", pkg],
+                capture_output=True, text=True, timeout=600,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
+
+
+def _ensure_fitz():
+    """确保 pymupdf 可用：缺失时自动安装，返回 fitz 模块或 None。"""
+    try:
+        import fitz
+        return fitz
+    except ImportError:
+        pass
+    print("[mediaocr] 检测到缺少 pymupdf，正在自动安装（首次需联网，约 30s）...",
+          file=sys.stderr)
+    if _pip_install("pymupdf"):
+        try:
+            import fitz
+            print("[mediaocr] pymupdf 安装成功", file=sys.stderr)
+            return fitz
+        except ImportError:
+            pass
+    return None
+
+
+def _ensure_ffmpeg() -> str | None:
+    """返回可用 ffmpeg 可执行文件路径。
+
+    优先系统 ffmpeg（PATH）；没有则自动安装 imageio-ffmpeg
+    （pip 包，自带静态 ffmpeg 二进制，Windows/Linux 通用，免 root）。
+    """
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        pass
+    except Exception:
+        return None
+    print("[mediaocr] 检测到缺少 ffmpeg，正在自动安装 imageio-ffmpeg "
+          "（首次需联网，约 30s）...", file=sys.stderr)
+    if _pip_install("imageio-ffmpeg"):
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+            print(f"[mediaocr] ffmpeg 就绪: {exe}", file=sys.stderr)
+            return exe
+        except Exception:
+            return None
+    return None
+
+
 def _ocr_image_inner(ocr: WeChatOCR, image_path: str) -> dict:
     try:
         result = ocr.ocr(image_path)
@@ -118,10 +184,10 @@ def _ocr_image_inner(ocr: WeChatOCR, image_path: str) -> dict:
 
 def _ocr_pdf_inner(ocr: WeChatOCR, pdf: Path, max_pages: int = 20, dpi: int = 200) -> dict:
     """PDF 识别：文本型直接抽取，扫描型渲染 + OCR。"""
-    try:
-        import fitz  # pymupdf
-    except ImportError:
-        return {"errcode": -1, "error": "缺少 pymupdf，请运行: uv pip install --python .venv/Scripts/python.exe pymupdf"}
+    fitz = _ensure_fitz()
+    if fitz is None:
+        return {"errcode": -1, "error": "pymupdf 安装失败，请手动运行: "
+                f"{sys.executable} -m pip install pymupdf"}
 
     pages_out = []
     doc = fitz.open(str(pdf))
@@ -179,15 +245,18 @@ def _ocr_pdf_inner(ocr: WeChatOCR, pdf: Path, max_pages: int = 20, dpi: int = 20
 def _ocr_video_inner(ocr: WeChatOCR, video: Path, interval_sec: float = 5.0,
                      max_frames: int = 10) -> dict:
     """视频识别：ffmpeg 抽帧 + OCR。"""
-    if shutil.which("ffmpeg") is None:
-        return {"errcode": -1, "error": "未找到 ffmpeg，请先安装（https://ffmpeg.org）"}
+    ffmpeg = _ensure_ffmpeg()
+    if ffmpeg is None:
+        return {"errcode": -1, "error": "ffmpeg 自动安装失败，请手动安装 "
+                "（https://ffmpeg.org）或运行: "
+                f"{sys.executable} -m pip install imageio-ffmpeg"}
 
     frames_out = []
     with tempfile.TemporaryDirectory() as td:
         pattern = os.path.join(td, "frame_%04d.png")
         # 抽帧：每 interval_sec 秒一帧
         cmd = [
-            "ffmpeg", "-y", "-i", str(video),
+            ffmpeg, "-y", "-i", str(video),
             "-vf", f"fps=1/{interval_sec}",
             "-frames:v", str(max_frames),
             pattern,
