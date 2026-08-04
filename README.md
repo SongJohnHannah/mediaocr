@@ -179,8 +179,8 @@ mcp_servers:
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `ocr_image` | `image_paths: list` | 图片/截图/扫描件识别（1~20 张自动批量），返回每行文字+坐标框+置信度+纯文本 |
-| `ocr_document` | `document_path, max_pages, dpi, interval_sec, max_frames` | PDF / 视频识别：自动判断类型（PDF 文本层直抽或渲染 OCR；视频 ffmpeg 抽帧 OCR） |
+| `ocr_image` | `image_paths: list, compact: bool=False` | 图片/截图/扫描件识别（1~20 张自动批量），返回每行文字+坐标框+置信度+纯文本；`compact=True` 只回文字+行数（大批量输出更小） |
+| `ocr_document` | `document_path, max_pages=20, dpi=150, interval_sec=5, max_frames=10, auto_dpi=True, dedup=True, compact=False` | PDF / 视频识别：PDF 文本层直抽或渲染 OCR（低置信度页自动升 300 重试）；视频 ffmpeg 抽帧 + 相邻帧去重（字幕场景省 50~80% OCR 调用） |
 
 > 每个工具的 description 都内置了「何时使用」触发词（图片扫描、截图文字提取、
 > 营业执照/发票识别、PDF 扫描件、视频字幕提取等），任何 MCP 客户端
@@ -200,7 +200,8 @@ mcp_servers:
 
 ```
 mediaocr/
-├── server.py            # MCP server（FastMCP，stdio / --http）
+├── server.py            # MCP server（FastMCP，stdio / --http / --workers N）
+├── core.py              # 编排层：批量管线 / 视频帧去重 / 自适应 dpi / spawn 并行池
 ├── extract_engine.py    # 从微信提取 OCR 引擎（可选，引擎已随仓库分发）
 ├── test_client.py       # MCP 协议测试客户端
 ├── wsl_test.py          # WSL/Linux 全链路测试（协议层 + 实际 OCR）
@@ -208,6 +209,8 @@ mediaocr/
 ├── wcocr.pyd            # Windows 调用封装（Py 3.11 ABI，已入库）
 └── wcocr.so             # Linux 调用封装（Py 3.11 ABI，已入库）
 ```
+
+> 性能说明：`--workers N` 控制 OCR 并行数（默认 `min(逻辑核,3)`）。引擎多守护进程并行上限实测 ~1.6x（3 worker 后无增益），且每 worker ~200MB 内存；主优化是「减少调用次数」——视频帧去重（字幕场景 -75% 调用）、自适应 dpi（PDF -10%）。
 
 ## ⚠️ 已知限制
 
