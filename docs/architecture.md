@@ -25,7 +25,9 @@ ctypes 显式声明固定参数与可变参数的分界，兼容 Apple Silicon A
 
 微信原始启动器带有应用沙箱继承要求；运行时只对临时副本进行 ad-hoc 签名。
 动态库和模型通过链接引用选定的引擎目录，保持 `Contents/Frameworks` 与
-`Contents/Resources` 相对结构。提取脚本可复制这些文件生成独立便携包。
+`Contents/Resources` 相对结构。仓库已包含 `engine/macos/` 的完整资源，
+运行时的链接均指向项目内文件，不依赖微信安装目录。文件来源和哈希记录在
+`engine/macos/manifest.json`，可用 `scripts/verify_macos_engine.py` 直接验证。
 所有识别发生在本机，不启动微信主程序，不读取账户数据。
 
 验证分为无需启动引擎的单元测试，以及 `MEDIAOCR_RUN_NATIVE_TESTS=1` 启用的

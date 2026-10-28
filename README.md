@@ -4,8 +4,9 @@
 
 微信 Windows / Linux / macOS 客户端都内置端侧 OCR 引擎。
 本项目通过 MCP 协议暴露图片、PDF 和视频文字识别工具。
-Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本机微信，
-也可从本机提取引擎并构建便携包。macOS 接入的是微信原生引擎，支持中英文截图。
+Windows、Linux、macOS 各自的原生引擎都已随仓库分发。
+macOS 引擎从微信 4.1.7 复制到 `engine/macos/`，准备好 Python 依赖后即可使用，
+无需另外安装、启动或登录微信。三个平台共用识别接口，分别加载本平台的微信引擎。
 
 本项目同时保留 Windows、Linux、macOS 三个平台的支持，由运行系统自动选择后端：
 
@@ -13,7 +14,7 @@ Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本
 | --- | --- | --- |
 | Windows | 原有 `wcocr.pyd` | `engine/ocr_engine/` + `engine/4.1.11.55/`；`run_mcp.cmd` |
 | Linux | 原有 `wcocr.so` | `engine/wxocr` + `libmmmojo.so` + `ocr_model/`；`python server.py` |
-| macOS | 新增 `macos_ocr.py` | 本机微信或 `engine/macos/`；`run_mcp.sh` |
+| macOS | 新增 `macos_ocr.py` | 自带 `engine/macos/`；`run_mcp.sh` |
 
 **完全离线 · 无需网络 · 无需登录 · 识别质量对标腾讯**
 
@@ -21,8 +22,8 @@ Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本
 
 ## ✨ 特性
 
-- 🚀 **开箱即用**：Windows + Linux 双平台引擎已随仓库分发，clone 即用，无需提取/下载
-- 🍎 **macOS 原生支持**：自动发现微信 4.x，复用图片、批量、PDF 和视频接口
+- 🚀 **开箱即用**：Windows / Linux / macOS 三平台引擎已随仓库分发，无需额外提取/下载
+- 🍎 **macOS 原生支持**：优先使用项目内微信引擎，复用图片、批量、PDF 和视频接口
 - 🔒 **完全离线**：图片不出本机，隐私安全
 - 🇨🇳 **顶级中文识别**：实测营业执照类文字置信度 0.99+
 - ⚡ **速度快**：单张识别 0.2~0.4s（暖）；批量可并行（`--workers`，实测 x1.38）
@@ -50,8 +51,8 @@ Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本
 | `Weixin.exe` | 3MB | Chromium 宿主（`--type=wxocr` 模式加载引擎） |
 | `mmmojo_64.dll` | 2.5MB | IPC 通信框架（唯一硬依赖） |
 
-> ✅ 引擎二进制**已随本仓库分发**（Windows + Linux 双平台兜底，clone 即用，无需联网下载）。
-> 引擎为微信专有资产，如需自行重新生成，可删除 `engine/` 后运行 `extract_engine.py`（Windows）或按下方 Linux 章节操作。
+> ✅ 三个平台的引擎二进制**已随本仓库分发**，安装 Python 依赖后即可运行。
+> 更新 macOS 引擎可用 `extract_engine.py --wechat-app /Applications/WeChat.app`；其他平台见对应章节。
 
 ## 📦 安装
 
@@ -172,11 +173,15 @@ mcp_servers:
 批量 spawn 并行、扫描/文本 PDF、视频帧去重、进程异常恢复及 MCP stdio / HTTP 调用。
 该版本的微信引擎包含 arm64 / x86_64 两种架构；Intel Mac 尚未实机验证。
 需要 macOS 12+、Python 3.11+；不需要 `wcocr.so`、Rosetta 或编译器。
+项目已包含微信 4.1.7 的 14 项 OCR 原生资源（约 83.3 MB），可直接从项目目录加载。
+`engine/macos/manifest.json` 记录来源版本、架构、文件大小和 SHA256。
 
 ```bash
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python ".[documents]"
 .venv/bin/python test_client.py
+# 验证项目内的 14 项引擎资源，并直接识别测试截图
+.venv/bin/python scripts/verify_macos_engine.py
 ```
 
 默认查找顺序：`engine/macos/` 便携引擎 → `/Applications/WeChat.app` 或
@@ -199,9 +204,7 @@ macOS 启动器带有微信应用的沙箱继承要求。后端只复制一个�
 ### 提取与打包
 
 ```bash
-# 可选：提取至 engine/macos/，之后无需依赖原微信安装目录
-.venv/bin/python extract_engine.py
-# 或指定微信安装位置
+# 可选：从本机微信更新 engine/macos/，通常无需运行
 .venv/bin/python extract_engine.py --wechat-app "/path/to/WeChat.app"
 
 # 构建包含 Python 源码、原生引擎、模型与测试样图的便携 ZIP
@@ -217,7 +220,7 @@ uv pip install --python .venv/bin/python build
 `bash run_mcp.sh` 或 `.venv/bin/python server.py`。
 首次安装依赖需要网络；完成安装后 OCR 完全离线。
 `engine-manifest.json` 记录打包引擎文件的 SHA256。
-本机提取物和 `dist/` 不提交 Git，打包脚本可重建；微信资源仍归腾讯所有。
+`engine/macos/` 已提交 Git；`dist/` 为本地构建产物。微信资源仍归腾讯所有。
 
 ### macOS MCP 配置
 
@@ -330,7 +333,7 @@ mediaocr/
 ├── docs/architecture.md # 架构与 macOS 调用链说明
 ├── test_client.py       # MCP 协议测试客户端
 ├── wsl_test.py          # WSL/Linux 全链路测试（协议层 + 实际 OCR）
-├── engine/              # Win/Linux 已入库；macos/ 为本机提取物
+├── engine/              # Windows / Linux / macOS 原生引擎均已入库
 ├── wcocr.pyd            # Windows 调用封装（Py 3.11 ABI，已入库）
 └── wcocr.so             # Linux 调用封装（Py 3.11 ABI，已入库）
 ```

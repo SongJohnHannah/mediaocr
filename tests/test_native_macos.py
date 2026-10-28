@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import _ocr_image_inner, ocr_pdf, ocr_video, run_pipeline
 from server import WeChatOCR, _find_engine
@@ -39,6 +40,21 @@ class NativeTests(unittest.TestCase):
         self.assertIn("微信截图识别测试", result["text"])
         self.assertIn("今天下午三点开会", result["text"])
         self.assertIn("123456", result["text"])
+
+    def test_project_engine_without_installed_wechat_fallback(self):
+        import macos_ocr
+        frameworks = (ROOT / "engine" / "macos" / "Contents" / "Frameworks").resolve()
+        validate = macos_ocr.validate_macos_engine
+
+        def require_project_engine(path):
+            self.assertEqual(path.resolve(), frameworks, "不应回退到已安装的微信")
+            return validate(path)
+
+        with patch.dict(os.environ, {"MEDIAOCR_WECHAT_PATH": ""}), \
+                patch("macos_ocr.validate_macos_engine", side_effect=require_project_engine):
+            self.assertEqual(_find_engine(), (frameworks / "wxocr", frameworks))
+        self.assertEqual(self.ocr.wechat_path, str(frameworks))
+        self.assert_text(_ocr_image_inner(self.ocr, str(FIXTURE)))
 
     def test_chinese_screenshot_coordinates_and_compact(self):
         result = _ocr_image_inner(self.ocr, str(FIXTURE))

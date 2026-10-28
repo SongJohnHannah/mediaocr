@@ -1,0 +1,81 @@
+{
+  "source": "WeChat for macOS",
+  "wechat_version": "4.1.7",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "launcher": "wxocr is an ad-hoc signed copy; libraries and models are unchanged.",
+  "files": {
+    "Contents/Frameworks/wxocr": {
+      "sha256": "58ccfd982488a3fae396ec64c53e0c939838c90ed74e1f5fc05702aab7745cc0",
+      "source_sha256": "a5e63fd7479b2b50b575168ae550d6c621a53ff81d1944f6a90c4c73773254d6",
+      "size": 133312
+    },
+    "Contents/Frameworks/libwxocr.dylib": {
+      "sha256": "91eb01ce03c6b5282e8a2ae93753fa0b313fd3d5bc4aa0e419703a157af943dc",
+      "source_sha256": "91eb01ce03c6b5282e8a2ae93753fa0b313fd3d5bc4aa0e419703a157af943dc",
+      "size": 57202688
+    },
+    "Contents/Frameworks/libmmmojo.dylib": {
+      "sha256": "3eab42430cd818ae59e22c9667f46a7fc19963f98922f2873a734430fa1c3e2b",
+      "source_sha256": "3eab42430cd818ae59e22c9667f46a7fc19963f98922f2873a734430fa1c3e2b",
+      "size": 3815520
+    },
+    "Contents/Resources/text_det_fp16_v1.xnet": {
+      "sha256": "d2ed97bdb1b73e0435c5b9e5291395832bb995c45452ba145e8b7c12b478450a",
+      "source_sha256": "d2ed97bdb1b73e0435c5b9e5291395832bb995c45452ba145e8b7c12b478450a",
+      "size": 1447764
+    },
+    "Contents/Resources/text_rec_fp16_v2.xnet": {
+      "sha256": "5b69967fe85a72a482301c67091580e6445f71c985d6aad2ef2a962cf307d0de",
+      "source_sha256": "5b69967fe85a72a482301c67091580e6445f71c985d6aad2ef2a962cf307d0de",
+      "size": 7287011
+    },
+    "Contents/Resources/OCRParaDetV1.1.0.26.xnet": {
+      "sha256": "ad9293b5d647a57337eae877343eadf35af80a699b2da476762f81b24b743a6e",
+      "source_sha256": "ad9293b5d647a57337eae877343eadf35af80a699b2da476762f81b24b743a6e",
+      "size": 2834840
+    },
+    "Contents/Resources/charset_zh10798.txt": {
+      "sha256": "ff25ab630bc4c161f17065334746bf2b69f3788146267f5c7527fb0cfe92ae85",
+      "source_sha256": "ff25ab630bc4c161f17065334746bf2b69f3788146267f5c7527fb0cfe92ae85",
+      "size": 43206
+    },
+    "Contents/Resources/sohu_simp.txt": {
+      "sha256": "6e0d87da6d1bec55d772244aa85caece31753e010670c712eab5ca533a269504",
+      "source_sha256": "6e0d87da6d1bec55d772244aa85caece31753e010670c712eab5ca533a269504",
+      "size": 19919
+    },
+    "Contents/Resources/QBarDetV1.7.0.26.xnet": {
+      "sha256": "4bebaeb0fa34a020522768fa649a45e28e3b768d7c9ca0458a4fe4be7d4b2296",
+      "source_sha256": "4bebaeb0fa34a020522768fa649a45e28e3b768d7c9ca0458a4fe4be7d4b2296",
+      "size": 413819
+    },
+    "Contents/Resources/QBarSegV1.1.0.26.xnet": {
+      "sha256": "30a536fa8b35d60bf39ec780259f37b64da8393de54a50fa7d6c71cea58b053d",
+      "source_sha256": "30a536fa8b35d60bf39ec780259f37b64da8393de54a50fa7d6c71cea58b053d",
+      "size": 224449
+    },
+    "Contents/Resources/FPMMFG1V1.2.0.26.xnet": {
+      "sha256": "a9e9a990ca68872baba7a37a9bf1cadabb9c54b84c9cb43ce19634619f744678",
+      "source_sha256": "a9e9a990ca68872baba7a37a9bf1cadabb9c54b84c9cb43ce19634619f744678",
+      "size": 1604697
+    },
+    "Contents/Resources/FPMMFG2V1.3.1.26.xnet": {
+      "sha256": "6e998da766ef2a62b9f114ead019cdff3df673f6c951c531a58c8e568d1f0c21",
+      "source_sha256": "6e998da766ef2a62b9f114ead019cdff3df673f6c951c531a58c8e568d1f0c21",
+      "size": 6952285
+    },
+    "Contents/Resources/PrivacyDetectV8.0.26.xnet": {
+      "sha256": "104793c78465c93bcfe4165cbfa25210015d2870b14614be58fd338694224b8e",
+      "source_sha256": "104793c78465c93bcfe4165cbfa25210015d2870b14614be58fd338694224b8e",
+      "size": 5351702
+    },
+    "Contents/Resources/DeepSR_REPSR_R_M4C16_Flip_ep24.xnet": {
+      "sha256": "529969c2d81b62cf1d8fcac2a1d67fcf08771c810e05bfb3006990746073f65d",
+      "source_sha256": "529969c2d81b62cf1d8fcac2a1d67fcf08771c810e05bfb3006990746073f65d",
+      "size": 45388
+    }
+  }
+}

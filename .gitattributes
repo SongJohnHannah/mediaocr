@@ -1,0 +1,2 @@
+# Vendor OCR resources must keep their exact bytes, including dictionary whitespace.
+engine/macos/Contents/** binary

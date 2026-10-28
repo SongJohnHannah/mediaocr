@@ -1,4 +1,4 @@
-# ---- 引擎二进制已随仓库分发（clone 即用，Windows+Linux 双平台兜底）----
+# ---- 引擎二进制已随仓库分发（Windows / Linux / macOS）----
 # engine/ 与 wcocr.pyd / wcocr.so 是微信 OCR 引擎提取产物，已提交；
 # 若需重新生成，可删除后运行 extract_engine.py（Windows）或按 README Linux 章节编译。
 engine/debug.log
@@ -24,8 +24,7 @@ engine/debug.log
 # ---- 本地计划文档 ----
 .hermes/
 
-# ---- 本机构建产物（macOS 引擎由已安装微信提取）----
-engine/macos/
+# ---- 本机构建产物 ----
 dist/
 build/
 *.egg-info/
