@@ -1,6 +1,6 @@
 """mediaocr 2-tool 测试：ocr_image（单张/批量）+ ocr_document（PDF/视频）
 
-Windows / Linux 通用。测试资源缺失时自动跳过对应用例：
+Windows / Linux / macOS 通用。测试资源缺失时自动跳过对应用例：
   test_img.png        —— ocr_image 必需（仓库内无，需自行放置）
   test_text.pdf       —— 文本型 PDF（可选）
   test_scan.pdf       —— 扫描型 PDF（可选）
@@ -15,8 +15,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 _HERE = Path(__file__).resolve().parent
-IS_LINUX = sys.platform.startswith("linux")
-PYTHON = str(_HERE / (".venv/bin/python" if IS_LINUX else ".venv/Scripts/python.exe"))
+PYTHON = sys.executable
 SERVER = str(_HERE / "server.py")
 
 
@@ -39,6 +38,8 @@ async def main():
             assert names == ["ocr_image", "ocr_document"], f"工具列表不对: {names}"
 
             img = _HERE / "test_img.png"
+            if not img.is_file():
+                img = _HERE / "tests" / "fixtures" / "wechat_sample.png"
             if img.is_file():
                 # 1) ocr_image 单张
                 r = await call(session, "ocr_image", {"image_paths": [str(img)]})

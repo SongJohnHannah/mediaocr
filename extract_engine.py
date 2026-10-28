@@ -27,12 +27,34 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import urllib.request
 import zipfile
 from pathlib import Path
 
 APP_DATA = Path(os.environ.get("APPDATA", ""))
+
+
+def extract_macos(frameworks: Path, output: Path) -> Path:
+    """Copy the native engine with its relative Resources layout (no user data)."""
+    from macos_ocr import MACOS_LIBRARIES, MACOS_MODELS, validate_macos_engine
+    if not validate_macos_engine(frameworks):
+        raise FileNotFoundError(f"微信 macOS OCR 引擎或模型不完整: {frameworks}")
+    destination = output / "macos" / "Contents"
+    for directory, names in (("Frameworks", ("wxocr", *MACOS_LIBRARIES)),
+                             ("Resources", MACOS_MODELS)):
+        target = destination / directory
+        target.mkdir(parents=True, exist_ok=True)
+        source = frameworks if directory == "Frameworks" else frameworks.parent / "Resources"
+        for name in names:
+            if (source / name).resolve() != (target / name).resolve():
+                shutil.copy2(source / name, target / name)
+    launcher = destination / "Frameworks" / "wxocr"
+    launcher.chmod(0o755)
+    subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(launcher)],
+                   check=True, capture_output=True, timeout=15)
+    return destination
 
 
 def find_wechat_roots() -> list[tuple[Path, Path]]:
@@ -154,7 +176,25 @@ def main():
                         help="输出目录（默认: 脚本同级 engine/）")
     parser.add_argument("--force-download", action="store_true",
                         help="跳过本地检索，强制下载备用引擎")
+    parser.add_argument("--wechat-app", type=Path,
+                        help="macOS 微信安装路径，例如 /Applications/WeChat.app")
     args = parser.parse_args()
+
+    if sys.platform == "darwin":
+        if args.force_download:
+            parser.error("macOS 不使用 Windows 备用引擎；请从本机微信提取")
+        from macos_ocr import find_macos_engine
+        if args.wechat_app:
+            frameworks = args.wechat_app.expanduser().resolve() / "Contents" / "Frameworks"
+        else:
+            found = find_macos_engine(args.output)
+            if found is None:
+                parser.error("找不到微信 macOS OCR；请安装微信 4.x 或用 --wechat-app 指定路径")
+            frameworks = found[1]
+        destination = extract_macos(frameworks, args.output)
+        print(f"✓ 微信 macOS OCR 已提取到: {destination}")
+        print("启动: python server.py（也可直接使用已安装的微信，无需提取）")
+        return
 
     # 强制下载模式
     if args.force_download:
@@ -184,7 +224,7 @@ def main():
     print(f"  版本: {'微信 4.x (wxocr.dll)' if is_wx4 else '微信 3.x (WeChatOCR.exe)'}")
     print(f"  大小: {total / 1024 / 1024:.1f} MB")
     print("\n下一步:")
-    print("  1) 安装依赖:  uv venv --python 3.11 .venv && uv pip install --python .venv/Scripts/python.exe 'mcp[cli]==1.9.*'")
+    print("  1) 安装依赖:  uv venv --python 3.11 .venv && uv pip install --python .venv/Scripts/python.exe '.[documents]'")
     print("  2) 获取调用封装 wcocr.pyd（见 README「获取 wcocr.pyd」）")
     print("  3) 启动:     .venv/Scripts/python.exe server.py")
 

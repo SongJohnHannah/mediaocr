@@ -94,6 +94,8 @@ def _format_result(result: dict, source: str, compact: bool = False) -> dict:
     }
     if not compact:
         out["lines"] = lines
+    if result.get("error"):
+        out["error"] = result["error"]
     return out
 
 
@@ -129,7 +131,7 @@ def _fingerprint(image_path: str):
     避免"字幕变了但全帧平均差太小"被误判为重复帧。失败返回 None。
     """
     try:
-        import fitz
+        import pymupdf as fitz
         doc = fitz.open(image_path)
         page = doc[0]
         w, h = page.rect.width, page.rect.height
@@ -179,7 +181,7 @@ def _dedup_frames(frame_files) -> list[dict]:
 
 def _render_and_ocr(ocr, doc, page_idx: int, dpi: int, auto_dpi: bool, compact: bool) -> dict:
     """渲染单页并 OCR（含自适应 dpi 重试）。doc 为已打开的 fitz 文档。"""
-    import fitz
+    import pymupdf as fitz
     buf = TempBuffer("pdf")
     page = doc[page_idx]
     try:
@@ -218,7 +220,7 @@ def process_job_with(ocr, job: dict) -> dict:
     if kind == "image":
         return _ocr_image_inner(ocr, job["path"], compact)
     if kind == "pdf_page":
-        import fitz
+        import pymupdf as fitz
         doc = fitz.open(job["pdf"])
         try:
             return _render_and_ocr(ocr, doc, job["page"], job.get("dpi", 150),
@@ -402,7 +404,7 @@ def _start_dep_install(name: str, pkg: str):
 def _ensure_fitz():
     """返回 fitz 模块；不可用时启动后台安装并返回 None（调用方看状态给提示）。"""
     try:
-        import fitz
+        import pymupdf as fitz
         _DEP_STATE["pymupdf"] = "ok"
         return fitz
     except ImportError:
@@ -455,7 +457,7 @@ def warmup_engine(ocr):
 def _make_warmup_image():
     """用 fitz 渲染一张含文字的小图作为预热样本；无 fitz 时返回 None（仅 init 预热）。"""
     try:
-        import fitz
+        import pymupdf as fitz
         doc = fitz.open()
         page = doc.new_page(width=200, height=60)
         page.insert_text((10, 35), "mediaocr warmup 0123456789", fontsize=14)

@@ -1,4 +1,4 @@
-"""MCP stdio 客户端测试：验证 mediaocr MCP server 可用（Windows / Linux 通用）。"""
+"""MCP stdio 客户端测试：验证 mediaocr MCP server 可用（三平台通用）。"""
 import asyncio
 import json
 import sys
@@ -9,20 +9,13 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 _HERE = Path(__file__).resolve().parent
-IS_LINUX = sys.platform.startswith("linux")
-
-if IS_LINUX:
-    PYTHON = str(_HERE / ".venv" / "bin" / "python")
-else:
-    PYTHON = str(_HERE / ".venv" / "Scripts" / "python.exe")
+PYTHON = sys.executable
 SERVER = str(_HERE / "server.py")
 
 # 测试图片：优先用项目内 test_img.png（用户自备），否则退回示例图
 TEST_IMG = str(_HERE / "test_img.png")
 if not Path(TEST_IMG).is_file():
-    _fallback = Path(r"C:\Users\songf\research\demo7\test_biz.png")
-    if _fallback.is_file():
-        TEST_IMG = str(_fallback)
+    TEST_IMG = str(_HERE / "tests" / "fixtures" / "wechat_sample.png")
 
 
 async def main():
@@ -47,6 +40,8 @@ async def main():
             for content in result.content:
                 if content.type == "text":
                     data = json.loads(content.text)
+                    assert data["errcode"] == 0, data
+                    assert data["line_count"] > 0, data
                     print(f"✓ ocr_image: errcode={data['errcode']} 行数={data['line_count']} "
                           f"尺寸={data['width']}x{data['height']}")
                     for line in data["lines"][:3]:

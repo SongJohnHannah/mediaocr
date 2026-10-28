@@ -1,7 +1,7 @@
 """
 mediaocr — 微信本地 OCR 引擎 MCP Server
 ========================================
-调用微信内置的端侧 OCR 引擎（wxocr.dll / wxocr ELF），通过 MCP 协议暴露为 AI 可用的工具。
+调用微信内置的端侧 OCR 引擎（Windows / Linux / macOS），通过 MCP 协议暴露为 AI 可用的工具。
 
 工具：
   - ocr_image     图片/截图文字识别（单张或批量，支持 compact 精简输出）
@@ -26,12 +26,14 @@ if str(_HERE) not in sys.path:
 
 ENGINE_DIR = _HERE / "engine"
 IS_LINUX = sys.platform.startswith("linux")
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
 
 if IS_LINUX:
     # Linux：wxocr ELF 引擎 + libmmmojo.so + ocr_model/（从 Linux 版微信提取）
     WXOCR_EXE = ENGINE_DIR / "wxocr"
     WECHAT_PATH = ENGINE_DIR          # 含 libmmmojo.so + ocr_model/
-else:
+elif IS_WINDOWS:
     # Windows：微信 4.x 便携引擎（wxocr.dll + mmmojo_64.dll + Weixin.exe）
     WECHAT_PATH = ENGINE_DIR / "4.1.11.55"   # 含 mmmojo_64.dll，父目录有 Weixin.exe
     WXOCR_DLL = ENGINE_DIR / "ocr_engine" / "wxocr.dll"
@@ -40,10 +42,10 @@ else:
 _FALLBACK_CANDIDATES = [
     # 微信 4.x
     (Path(os.environ.get("APPDATA", "")) / "Tencent/xwechat/XPlugin/plugins/WeChatOcr",
-     r"C:\Program Files\Tencent\Weixin"),
+     Path(r"C:\Program Files\Tencent\Weixin")),
     # 微信 3.x
     (Path(os.environ.get("APPDATA", "")) / "Tencent/WeChat/XPlugin/Plugins/WeChatOCR",
-     r"C:\Program Files (x86)\Tencent\WeChat"),
+     Path(r"C:\Program Files (x86)\Tencent\WeChat")),
 ]
 
 # ── 编排层（core.py）────────────────────────────────────────
@@ -82,23 +84,40 @@ class WeChatOCR:
         self.wechat_path = str(wechat_path)
         self._lock = threading.Lock()
         self._initialized = False
+        self._backend = None
 
     def _ensure_init(self):
+        with self._lock:
+            self._init_locked()
+
+    def _init_locked(self):
         if self._initialized:
             return
-        import wcocr  # 延迟导入，加快 server 启动
-        wcocr.init(self.wxocr_dll, self.wechat_path)
+        if IS_MACOS:
+            from macos_ocr import MacOSOCR
+            self._backend = MacOSOCR(self.wxocr_dll, self.wechat_path)
+            self._backend._ensure_init()
+        else:
+            import wcocr  # 延迟导入，加快 server 启动
+            if wcocr.init(self.wxocr_dll, self.wechat_path) is False:
+                raise RuntimeError("微信 OCR 引擎初始化失败")
+            self._backend = wcocr
         self._initialized = True
 
     def ocr(self, image_path: str | Path) -> dict:
-        import wcocr
         with self._lock:
-            self._ensure_init()
-            img = str(Path(image_path).resolve())
+            img = str(Path(image_path).expanduser().resolve())
             if not Path(img).is_file():
                 raise FileNotFoundError(f"图片不存在: {img}")
-            result = wcocr.ocr(img)
+            self._init_locked()
+            result = self._backend.ocr(img)
         return result
+
+    def close(self):
+        with self._lock:
+            if IS_MACOS and self._backend is not None:
+                self._backend.close()
+            self._initialized = False
 
 
 def create_server(ocr: WeChatOCR, workers: int = 1):
@@ -204,13 +223,19 @@ def create_server(ocr: WeChatOCR, workers: int = 1):
 def _find_engine() -> tuple[Path, Path] | None:
     """定位 OCR 引擎，返回 (引擎路径, 运行时目录)。
     Linux:  (wxocr ELF, engine/ 含 libmmmojo.so+ocr_model)
+    macOS:  (wxocr Mach-O, Contents/Frameworks 含 dylib，旁边 Resources 含模型)
     Windows: (wxocr.dll, engine/<版本>/ 含 mmmojo_64.dll)"""
+    if IS_MACOS:
+        from macos_ocr import find_macos_engine
+        return find_macos_engine(ENGINE_DIR)
     if IS_LINUX:
         # 1) 便携引擎：engine/wxocr + engine/libmmmojo.so + engine/ocr_model/
         if (WXOCR_EXE.is_file()
                 and (ENGINE_DIR / "libmmmojo.so").is_file()
                 and (ENGINE_DIR / "ocr_model").is_dir()):
             return WXOCR_EXE, WECHAT_PATH
+        return None
+    if not IS_WINDOWS:
         return None
     # 1) 项目自带的便携引擎
     if WXOCR_DLL.is_file() and (WECHAT_PATH / "mmmojo_64.dll").is_file():
@@ -249,7 +274,15 @@ def main():
 
     engine = _find_engine()
     if engine is None:
-        if IS_LINUX:
+        if IS_MACOS:
+            print(
+                "ERROR: 找不到完整的微信 macOS OCR 引擎。\n"
+                "  请安装微信 4.x 到 /Applications，或运行 python extract_engine.py。\n"
+                "  自定义位置可设置 MEDIAOCR_WECHAT_PATH=/path/to/WeChat.app。\n"
+                "  便携引擎应位于 engine/macos/Contents/{Frameworks,Resources}。",
+                file=sys.stderr,
+            )
+        elif IS_LINUX:
             print(
                 "ERROR: 找不到微信 OCR 引擎（Linux）。\n"
                 "  请确认 engine/ 目录完整: wxocr + libmmmojo.so + ocr_model/\n"
@@ -282,11 +315,16 @@ def main():
     threading.Thread(target=warmup_engine, args=(ocr,), daemon=True).start()  # 后台预热引擎
     mcp = create_server(ocr, workers)
 
-    if args.http:
-        print(f"[mediaocr] HTTP 模式 http://127.0.0.1:{args.http}/mcp", file=sys.stderr)
-        mcp.run(transport="http", host="127.0.0.1", port=args.http)
-    else:
-        mcp.run(transport="stdio")
+    try:
+        if args.http:
+            print(f"[mediaocr] HTTP 模式 http://127.0.0.1:{args.http}/mcp", file=sys.stderr)
+            mcp.settings.host = "127.0.0.1"
+            mcp.settings.port = args.http
+            mcp.run(transport="streamable-http")
+        else:
+            mcp.run(transport="stdio")
+    finally:
+        ocr.close()
 
 
 if __name__ == "__main__":

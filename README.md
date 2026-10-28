@@ -2,9 +2,10 @@
 
 > 把微信内置的本地 OCR 引擎提取出来，封装成 **MCP server**，供 AI 客户端离线调用。
 
-微信 Windows / Linux 客户端都内置端侧 OCR 引擎（文本检测 + 识别，支持 13,562 个中文字符）。
-本项目把引擎剥离出来（Windows + Linux 双平台已随仓库分发，共 ~110MB），
-通过 MCP 协议暴露为 AI 可用的工具。**引擎与官方微信安装包内字节级一致（已验证）**。
+微信 Windows / Linux / macOS 客户端都内置端侧 OCR 引擎。
+本项目通过 MCP 协议暴露图片、PDF 和视频文字识别工具。
+Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本机微信，
+也可从本机提取引擎并构建便携包。macOS 接入的是微信原生引擎，支持中英文截图。
 
 **完全离线 · 无需网络 · 无需登录 · 识别质量对标腾讯**
 
@@ -13,6 +14,7 @@
 ## ✨ 特性
 
 - 🚀 **开箱即用**：Windows + Linux 双平台引擎已随仓库分发，clone 即用，无需提取/下载
+- 🍎 **macOS 原生支持**：自动发现微信 4.x，复用图片、批量、PDF 和视频接口
 - 🔒 **完全离线**：图片不出本机，隐私安全
 - 🇨🇳 **顶级中文识别**：实测营业执照类文字置信度 0.99+
 - ⚡ **速度快**：单张识别 0.2~0.4s（暖）；批量可并行（`--workers`，实测 x1.38）
@@ -59,7 +61,7 @@ cd mediaocr
 
 # 创建环境
 uv venv --python 3.11 .venv
-uv pip install --python .venv/Scripts/python.exe "mcp[cli]==1.9.*"
+uv pip install --python .venv/Scripts/python.exe ".[documents]"
 
 # 引擎已随仓库分发（engine/ 目录），clone 即用，无需提取
 # 如需从本机微信重新生成：.venv/Scripts/python.exe extract_engine.py
@@ -95,7 +97,7 @@ uv pip install --python .venv/Scripts/python.exe "mcp[cli]==1.9.*"
 
 Linux 版微信同样内置端侧 OCR 引擎，本项目在 Linux 上使用**同一套微信引擎**
 （wxocr ELF + libmmmojo.so + ocr_model/），识别效果与 Windows 版一致。
-server.py 自动检测平台，双分支运行，**Windows / Linux 共用同一份代码与工具**。
+server.py 自动检测平台，Windows / Linux / macOS 共用同一份代码与工具。
 
 ### Linux 版结构差异
 
@@ -114,7 +116,7 @@ Linux 引擎（`engine/wxocr` + `libmmmojo.so` + `ocr_model/`）和 `wcocr.so` �
 ```bash
 # 1. 前置：uv（Python 3.11）+ mcp
 uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python "mcp[cli]==1.9.*"
+uv pip install --python .venv/bin/python ".[documents]"
 
 # 2. 测试
 .venv/bin/python test_client.py
@@ -155,6 +157,86 @@ mcp_servers:
 - `wcocr.so` 已随仓库预编译分发（Python 3.11 ABI），一般无需自己编译；编译方法见上方"从零重新生成"
 - 提取引擎时无需微信安装目录结构，`wxocr` + `libmmmojo.so` + `ocr_model/` 三个文件即可独立运行
 - 引擎版本随微信更新，接口可能变动
+
+## 🍎 macOS 支持（微信原生引擎）
+
+已在 Apple Silicon、macOS 26.6、微信 4.1.7 上实测中英文图片、中文路径、
+批量 spawn 并行、扫描/文本 PDF、视频帧去重、进程异常恢复及 MCP stdio / HTTP 调用。
+该版本的微信引擎包含 arm64 / x86_64 两种架构；Intel Mac 尚未实机验证。
+需要 macOS 12+、Python 3.11+；不需要 `wcocr.so`、Rosetta 或编译器。
+
+```bash
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python ".[documents]"
+.venv/bin/python test_client.py
+```
+
+默认查找顺序：`engine/macos/` 便携引擎 → `/Applications/WeChat.app` 或
+`Weixin.app` → `~/Applications/`。自定义位置通过环境变量指定：
+
+```bash
+MEDIAOCR_WECHAT_PATH="/path/to/WeChat.app" .venv/bin/python server.py
+```
+
+`MEDIAOCR_WECHAT_PATH` 也接受 `Contents/Frameworks` 目录；显式指定后若资源不完整，
+启动会报错，避免无意间使用另一个微信版本。
+无需启动或登录微信，不读取聊天记录。已有微信截图、保存的图片均交给 `ocr_image`。
+
+macOS 启动器带有微信应用的沙箱继承要求。后端只复制一个临时启动器并做本地签名，
+保持动态库和模型来自原安装包，**不会修改 WeChat.app**。
+每个 worker 使用独立 bundle ID 建立 Mach IPC，并隔离原生进程和日志，
+防止引擎崩溃或日志破坏 MCP stdio；请求超时后可重新启动引擎。
+受限执行沙箱可能禁止 Mach IPC，此时请在普通终端或允许本地进程通信的 MCP 客户端运行。
+
+### 提取与打包
+
+```bash
+# 可选：提取至 engine/macos/，之后无需依赖原微信安装目录
+.venv/bin/python extract_engine.py
+# 或指定微信安装位置
+.venv/bin/python extract_engine.py --wechat-app "/path/to/WeChat.app"
+
+# 构建包含 Python 源码、原生引擎、模型与测试样图的便携 ZIP
+.venv/bin/python scripts/build_macos.py
+# 产物：dist/mediaocr-0.2.0-macos.zip 及 .zip.sha256
+
+# 构建不含微信专有引擎的 Python wheel / 源码包
+uv pip install --python .venv/bin/python build
+.venv/bin/python -m build
+```
+
+便携包解压后，在其目录中按上面的环境安装命令准备 Python 依赖，再运行
+`bash run_mcp.sh` 或 `.venv/bin/python server.py`。
+首次安装依赖需要网络；完成安装后 OCR 完全离线。
+`engine-manifest.json` 记录打包引擎文件的 SHA256。
+本机提取物和 `dist/` 不提交 Git，打包脚本可重建；微信资源仍归腾讯所有。
+
+### macOS MCP 配置
+
+```json
+{
+  "mcpServers": {
+    "mediaocr": {
+      "command": "/absolute/path/mediaocr/.venv/bin/python",
+      "args": ["/absolute/path/mediaocr/server.py"]
+    }
+  }
+}
+```
+
+HTTP 模式：`.venv/bin/python server.py --http 8765`，端点为
+`http://127.0.0.1:8765/mcp`（Streamable HTTP）。
+
+### 回归测试
+
+```bash
+# 无原生引擎的回归测试（平台发现、协议、错误处理、初始化并发）
+.venv/bin/python -m unittest discover -s tests -v
+# macOS 完整实机测试（需预装 documents 依赖，允许 Mach IPC）
+MEDIAOCR_RUN_NATIVE_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+测试图 `tests/fixtures/wechat_sample.png` 是合成样本，不包含真实聊天或个人信息。
 
 ## 🔌 接入 MCP 客户端
 
@@ -229,10 +311,18 @@ mcp_servers:
 mediaocr/
 ├── server.py            # MCP server（FastMCP，stdio / --http / --workers N）
 ├── core.py              # 编排层：批量管线 / 视频帧去重 / 自适应 dpi / spawn 并行池
-├── extract_engine.py    # 从微信提取 OCR 引擎（可选，引擎已随仓库分发）
+├── macos_ocr.py         # macOS 引擎发现、独立工作进程、超时与清理
+├── macos_ocr_worker.py  # ctypes + MMMojo 原生通信，隔离原生日志
+├── macos_ocr_protocol.py # 微信 4.x protobuf 消息适配
+├── extract_engine.py    # Windows / macOS 引擎提取
+├── pyproject.toml       # 安装依赖、mediaocr 命令与 wheel 打包配置
+├── run_mcp.sh           # macOS / Linux 启动入口
+├── scripts/build_macos.py # macOS 原生引擎便携包构建
+├── tests/              # 回归测试、真实引擎/MCP 集成测试、合成测试截图
+├── docs/architecture.md # 架构与 macOS 调用链说明
 ├── test_client.py       # MCP 协议测试客户端
 ├── wsl_test.py          # WSL/Linux 全链路测试（协议层 + 实际 OCR）
-├── engine/              # ✅ 微信 OCR 引擎（已入库，Win+Linux 双平台，~110MB）
+├── engine/              # Win/Linux 已入库；macos/ 为本机提取物
 ├── wcocr.pyd            # Windows 调用封装（Py 3.11 ABI，已入库）
 └── wcocr.so             # Linux 调用封装（Py 3.11 ABI，已入库）
 ```

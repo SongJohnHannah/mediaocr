@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediaocr"
+version = "0.2.0"
+description = "Offline WeChat OCR MCP server for Windows, Linux and macOS"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "mcp[cli]>=1.26,<2",
+    "protobuf>=4.25,<8; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+documents = ["pymupdf>=1.24,<2", "imageio-ffmpeg>=0.5,<1"]
+dev = ["build>=1", "protobuf>=4.25,<8"]
+
+[project.scripts]
+mediaocr = "server:main"
+
+[tool.setuptools]
+py-modules = ["server", "core", "extract_engine", "macos_ocr", "macos_ocr_worker", "macos_ocr_protocol"]

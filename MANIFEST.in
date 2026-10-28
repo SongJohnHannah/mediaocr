@@ -1,0 +1,5 @@
+include run_mcp.sh
+include test_client.py test_all_tools.py
+recursive-include tests *.py *.png *.txt
+recursive-include docs *.md
+include scripts/build_macos.py

@@ -23,3 +23,9 @@ engine/debug.log
 
 # ---- 本地计划文档 ----
 .hermes/
+
+# ---- 本机构建产物（macOS 引擎由已安装微信提取）----
+engine/macos/
+dist/
+build/
+*.egg-info/
