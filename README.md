@@ -16,6 +16,9 @@ macOS 引擎从微信 4.1.7 复制到 `engine/macos/`，准备好 Python 依赖�
 | Linux | 原有 `wcocr.so` | `engine/wxocr` + `libmmmojo.so` + `ocr_model/`；`python server.py` |
 | macOS | 新增 `macos_ocr.py` | 自带 `engine/macos/`；`run_mcp.sh` |
 
+**换到另一台 Mac 也无需安装微信**：完整下载最新 `main` 分支，保留项目内的
+`engine/macos/`，准备好 Python 3.11+ 和项目依赖后即可离线识别图片。
+
 **完全离线 · 无需网络 · 无需登录 · 识别质量对标腾讯**
 
 ---
@@ -54,7 +57,7 @@ macOS 引擎从微信 4.1.7 复制到 `engine/macos/`，准备好 Python 依赖�
 > ✅ 三个平台的引擎二进制**已随本仓库分发**，安装 Python 依赖后即可运行。
 > 更新 macOS 引擎可用 `extract_engine.py --wechat-app /Applications/WeChat.app`；其他平台见对应章节。
 
-## 📦 安装
+## 📦 Windows 安装
 
 ### 1. 前置条件
 
@@ -176,16 +179,53 @@ mcp_servers:
 项目已包含微信 4.1.7 的 14 项 OCR 原生资源（约 83.3 MB），可直接从项目目录加载。
 `engine/macos/manifest.json` 记录来源版本、架构、文件大小和 SHA256。
 
+### 在另一台 Mac 上安装与验证（无需微信）
+
+完整下载最新 `main` 分支并解压，或使用下面的克隆命令。
+项目内已带有对应的原生引擎、通信库和模型，无需在新 Mac 上安装、启动或登录微信，
+也无需重新提取引擎。
+
+先准备 Python 3.11+ 和 uv，再按下面的步骤获取项目、安装依赖并验证：
+
 ```bash
+# 已下载并解压项目时，直接进入其目录，跳过下面两行
+git clone --branch main --single-branch https://github.com/SongJohnHannah/mediaocr.git
+cd mediaocr
+
+# 创建 Python 环境，安装依赖（含 PDF / 视频支持）
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python ".[documents]"
-.venv/bin/python test_client.py
+
 # 验证项目内的 14 项引擎资源，并直接识别测试截图
 .venv/bin/python scripts/verify_macos_engine.py
+
+# 验证 MCP 握手、工具列表和图片识别
+.venv/bin/python test_client.py
 ```
 
+没有 uv 时，也可用 Python 自带的 venv 和 pip 准备环境：
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install ".[documents]"
+```
+
+首次安装依赖需要网络；环境准备好后，图片识别完全离线。
+验证脚本会检查资源哈希，并输出识别文字及项目内引擎路径。
+
+### 启动与引擎选择
+
+```bash
+.venv/bin/python server.py
+# 或使用项目启动脚本
+bash run_mcp.sh
+```
+
+默认启动的是 MCP stdio 服务，会等待 MCP 客户端输入；接入方式见下方「macOS MCP 配置」。
+
 默认查找顺序：`engine/macos/` 便携引擎 → `/Applications/WeChat.app` 或
-`Weixin.app` → `~/Applications/`。自定义位置通过环境变量指定：
+`Weixin.app` → `~/Applications/`。项目内资源完整时直接使用自带引擎，
+不依赖微信安装目录。只有需要指定其他引擎来源时，才设置下面的环境变量：
 
 ```bash
 MEDIAOCR_WECHAT_PATH="/path/to/WeChat.app" .venv/bin/python server.py
@@ -218,7 +258,6 @@ uv pip install --python .venv/bin/python build
 
 便携包解压后，在其目录中按上面的环境安装命令准备 Python 依赖，再运行
 `bash run_mcp.sh` 或 `.venv/bin/python server.py`。
-首次安装依赖需要网络；完成安装后 OCR 完全离线。
 `engine-manifest.json` 记录打包引擎文件的 SHA256。
 `engine/macos/` 已提交 Git；`dist/` 为本地构建产物。微信资源仍归腾讯所有。
 
