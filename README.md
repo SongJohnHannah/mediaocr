@@ -7,6 +7,14 @@
 Windows + Linux 引擎已随仓库分发（共 ~110MB）；macOS 自动使用本机微信，
 也可从本机提取引擎并构建便携包。macOS 接入的是微信原生引擎，支持中英文截图。
 
+本项目同时保留 Windows、Linux、macOS 三个平台的支持，由运行系统自动选择后端：
+
+| 平台 | 调用后端 | 引擎与入口 |
+| --- | --- | --- |
+| Windows | 原有 `wcocr.pyd` | `engine/ocr_engine/` + `engine/4.1.11.55/`；`run_mcp.cmd` |
+| Linux | 原有 `wcocr.so` | `engine/wxocr` + `libmmmojo.so` + `ocr_model/`；`python server.py` |
+| macOS | 新增 `macos_ocr.py` | 本机微信或 `engine/macos/`；`run_mcp.sh` |
+
 **完全离线 · 无需网络 · 无需登录 · 识别质量对标腾讯**
 
 ---
